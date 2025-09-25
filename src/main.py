@@ -235,6 +235,67 @@ def download_data(input_file: str = 'latest.json') -> bool:
         logger.error(f"Download error: {e}")
         return False
 
+def scrape_data_with_config(resume: bool = False, no_download: bool = False, all_versions: bool = False, 
+                          organize_by_series: bool = False, specific_release: int = None, 
+                          threads: int = 5, verbose: bool = False) -> bool:
+    """
+    Enhanced scraping function with configuration options
+    """
+    try:
+        if verbose:
+            logger.setLevel(logging.DEBUG)
+        
+        logger.info("Starting scraping with configuration...")
+        
+        if resume:
+            logger.info("Resume mode: checking for existing files...")
+            # Resume logic - check for existing files and skip scraping if possible
+            if Path('downloads/links.json').exists() or Path('downloads/latest.json').exists():
+                logger.info("Found existing files, skipping scraping in resume mode")
+                return True
+            else:
+                logger.info("No existing files found, proceeding with scraping")
+        
+        stats = run_scraper(logging_lvl=logging.DEBUG if verbose else logging.INFO)
+        if stats:
+            logger.info("Scraping completed successfully")
+            return True
+        else:
+            logger.error("Scraping failed")
+            return False
+    except Exception as e:
+        logger.error(f"Scraping error: {e}")
+        return False
+
+def download_data_with_config(input_file: str = 'latest.json', resume: bool = False, no_download: bool = False, 
+                            all_versions: bool = False, organize_by_series: bool = False, 
+                            specific_release: int = None, threads: int = 5, verbose: bool = False) -> bool:
+    """
+    Enhanced download function with configuration options
+    """
+    try:
+        if verbose:
+            logger.setLevel(logging.DEBUG)
+            
+        if no_download:
+            logger.info("No download mode: skipping download")
+            return True
+            
+        logger.info(f"Starting download from {input_file} with configuration...")
+        
+        dest_dir = 'downloads/By-Series' if organize_by_series else 'downloads/By-Release'
+        
+        success = download_pdfs(input_file=input_file, dest_dir=dest_dir, concurrency=threads)
+        if success:
+            logger.info("Download completed successfully")
+            return True
+        else:
+            logger.error("Download failed")
+            return False
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        return False
+
 def main(args):
     """
     Main function to handle argument parsing and invoking the scraper and downloader
