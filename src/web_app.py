@@ -589,7 +589,7 @@ def action_buttons():
         me.button(
             label,
             on_click=callback,
-            disabled=disabled,
+            disabled=int(disabled),
             style=base_style
         )
 
