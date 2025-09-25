@@ -415,15 +415,27 @@ def main_page():
             elif app_state.current_tab == "logs":
                 logs_content()
 
+def switch_to_dashboard():
+    """Switch to dashboard tab"""
+    app_state.current_tab = "dashboard"
+
+def switch_to_settings():
+    """Switch to settings tab"""
+    app_state.current_tab = "settings"
+
+def switch_to_logs():
+    """Switch to logs tab"""
+    app_state.current_tab = "logs"
+
 def navigation_tabs():
     """Navigation tabs component"""
     tabs = [
-        ("dashboard", "Dashboard", "dashboard"),
-        ("settings", "Settings", "settings"),
-        ("logs", "Logs", "article")
+        ("dashboard", "Dashboard", "dashboard", switch_to_dashboard),
+        ("settings", "Settings", "settings", switch_to_settings),
+        ("logs", "Logs", "article", switch_to_logs)
     ]
 
-    for tab_id, label, icon in tabs:
+    for tab_id, label, icon, click_handler in tabs:
         is_active = app_state.current_tab == tab_id
         with me.box(
             style=me.Style(
@@ -437,7 +449,7 @@ def navigation_tabs():
                 align_items="center",
                 gap=Theme.SPACE_2
             ),
-            on_click=lambda e, tab=tab_id: switch_tab(tab)
+            on_click=click_handler
         ):
             me.icon(icon, style=me.Style(font_size=18))
             me.text(label, style=me.Style(
