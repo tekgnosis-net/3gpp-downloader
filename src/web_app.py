@@ -415,15 +415,15 @@ def main_page():
             elif app_state.current_tab == "logs":
                 logs_content()
 
-def switch_to_dashboard():
+def switch_to_dashboard(e: me.ClickEvent):
     """Switch to dashboard tab"""
     app_state.current_tab = "dashboard"
 
-def switch_to_settings():
+def switch_to_settings(e: me.ClickEvent):
     """Switch to settings tab"""
     app_state.current_tab = "settings"
 
-def switch_to_logs():
+def switch_to_logs(e: me.ClickEvent):
     """Switch to logs tab"""
     app_state.current_tab = "logs"
 
