@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from threading import Timer
 import signal
+from collections import defaultdict
 from tools.etsi_spider import EtsiSpider
 from scrapy.crawler import CrawlerProcess
 from tools.monitored_pool import MonitoredPoolManager
@@ -91,13 +92,10 @@ def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'l
         logger.info(f"Filtering failed in {elapsed:.2f} seconds.")
         return False
 
-    # Group by ts_number
-    grouped = {}
+    # Group by ts_number using defaultdict
+    grouped = defaultdict(list)
     for item in data:
-        ts = item['ts_number']
-        if ts not in grouped:
-            grouped[ts] = []
-        grouped[ts].append(item)
+        grouped[item['ts_number']].append(item)
     
     # For each group, find the item with the highest version
     filtered = []
@@ -147,6 +145,7 @@ def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log
         'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'ROBOTSTXT_OBEY': True,
         'CONCURRENT_REQUESTS': 32,  # Increased for speed; reduce if rate-limited
+        'DOWNLOAD_DELAY': 0.1,  # Small delay between requests to be respectful
         'LOG_ENABLED': True,
         'LOG_FILE': logfile,
         'LOG_LEVEL': logging_lvl,
@@ -193,6 +192,42 @@ def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log
                         return {}
     logger.warning("No Scrapy stats found.")
     return {}
+
+def scrape_data() -> bool:
+    """
+    Wrapper function for web app to run scraping
+    Returns True if successful, False otherwise
+    """
+    try:
+        logger.info("Starting scraping from web interface...")
+        stats = run_scraper()
+        if stats:
+            logger.info("Scraping completed successfully")
+            return True
+        else:
+            logger.error("Scraping failed")
+            return False
+    except Exception as e:
+        logger.error(f"Scraping error: {e}")
+        return False
+
+def download_data(input_file: str = 'latest.json') -> bool:
+    """
+    Wrapper function for web app to run downloading
+    Returns True if successful, False otherwise
+    """
+    try:
+        logger.info(f"Starting download from {input_file}...")
+        success = download_pdfs(input_file=input_file)
+        if success:
+            logger.info("Download completed successfully")
+            return True
+        else:
+            logger.error("Download failed")
+            return False
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        return False
 
 def main(args):
     """

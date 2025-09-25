@@ -28,36 +28,128 @@ logger = setup_logger('json_downloader', log_file=logging_file)
 
 __all__ = ["download_from_json"]
 
+# Global connector for connection pooling
+_connector = None
+
+def get_connector():
+    global _connector
+    if _connector is None:
+        # Create connector with connection pooling
+        _connector = aiohttp.TCPConnector(
+            limit=100,  # Max connections
+            limit_per_host=10,  # Max connections per host
+            ttl_dns_cache=300,  # DNS cache TTL
+            use_dns_cache=True,
+            keepalive_timeout=60,
+            enable_cleanup_closed=True,
+        )
+    return _connector
+
+def get_session():
+    return aiohttp.ClientSession(
+        connector=get_connector(),
+        timeout=aiohttp.ClientTimeout(total=300, connect=10, sock_read=60)  # 5 min total, 10s connect, 60s read
+    )
+
+async def cleanup():
+    """Cleanup the global connector"""
+    global _connector
+    if _connector:
+        await _connector.close()
+        _connector = None
+
+# ------------------------------------------------------------------
+#  Retry utilities
+# ------------------------------------------------------------------
+async def retry_with_backoff(func, *args, max_retries=5, base_delay=1.0, max_delay=60.0, **kwargs):
+    """Retry a function with exponential backoff"""
+    delay = base_delay
+    for attempt in range(max_retries + 1):
+        try:
+            return await func(*args, **kwargs)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            if attempt == max_retries:
+                raise e
+            logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay:.1f}s...")
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, max_delay)
+        except Exception as e:
+            # Don't retry for other exceptions
+            raise e
+
 # ------------------------------------------------------------------
 #  _download_chunk()
 # ------------------------------------------------------------------
 async def _download_chunk(url, start, end, session):
-    logger.info(f"[download_chunk] Downloading bytes {start}-{end} from {url}")
+    logger.debug(f"[download_chunk] Downloading bytes {start}-{end} from {url}")
     headers = {'Range': f'bytes={start}-{end}'}
-    async with session.get(url, headers=headers) as resp:
-        if resp.status != 206:  # Partial Content
-            raise aiohttp.ClientError(f"Range request failed: {resp.status}")
-        return await resp.read()
+    
+    async def chunk_request():
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 206:  # Partial Content
+                raise aiohttp.ClientError(f"Range request failed: {resp.status}")
+            return await resp.read()
+    
+    return await retry_with_backoff(chunk_request)
+
+async def _download_and_write_chunk(url, start, end, session, file_handle):
+    """Download a chunk and write it directly to the file at the correct position."""
+    logger.debug(f"[download_and_write_chunk] Downloading and writing bytes {start}-{end} from {url}")
+    headers = {'Range': f'bytes={start}-{end}'}
+    
+    async def chunk_request():
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 206:  # Partial Content
+                raise aiohttp.ClientError(f"Range request failed: {resp.status}")
+            chunk_data = await resp.read()
+            # Seek to the correct position and write
+            await file_handle.seek(start)
+            await file_handle.write(chunk_data)
+            return len(chunk_data)
+    
+    return await retry_with_backoff(chunk_request)
 
 # ------------------------------------------------------------------
 #  _multipart_download()
 # ------------------------------------------------------------------
-async def _multipart_download(url, dest_path, remote_size, num_chunks=4):
+async def _multipart_download(url, dest_path, remote_size, num_chunks=4, session=None, progress_callback=None):
     logger.info(f"[multipart_download] Using multi-part download for {dest_path} with {num_chunks} chunks")
-    async with aiohttp.ClientSession() as session:
+    if session is None:
+        session = get_session()
+        close_session = True
+    else:
+        close_session = False
+    
+    try:
         # Calculate chunk ranges
         chunk_size = remote_size // num_chunks
         ranges = [(i * chunk_size, (i + 1) * chunk_size - 1 if i < num_chunks - 1 else remote_size - 1)
                   for i in range(num_chunks)]
 
-        # Download chunks concurrently
-        tasks = [_download_chunk(url, start, end, session) for start, end in ranges]
-        chunks = await asyncio.gather(*tasks)
-
-        # Write chunks in order
+        # Open file for writing
         async with aiofiles.open(dest_path, 'wb') as f:
-            for chunk in chunks:
-                await f.write(chunk)
+            # Download and write chunks concurrently
+            tasks = []
+            downloaded = 0
+            lock = asyncio.Lock()  # To synchronize progress updates
+            
+            async def download_and_write_with_progress(start, end):
+                nonlocal downloaded
+                chunk_size = await _download_and_write_chunk(url, start, end, session, f)
+                async with lock:
+                    downloaded += chunk_size
+                    if progress_callback:
+                        progress_callback(downloaded / remote_size * 100)
+            
+            for start, end in ranges:
+                task = asyncio.create_task(download_and_write_with_progress(start, end))
+                tasks.append(task)
+            
+            # Wait for all chunks to complete
+            await asyncio.gather(*tasks)
+    finally:
+        if close_session:
+            await session.close()
 
 # ------------------------------------------------------------------
 #  _fetch_and_write()
@@ -67,6 +159,8 @@ async def _fetch_and_write(
         dest_path: Path,
         *,
         num_chunks: int = 10,
+        session=None,
+        progress_callback=None,
 ) -> None:
     """
     Download *url* and store it at *dest_path*.  
@@ -85,20 +179,30 @@ async def _fetch_and_write(
         Full path (including the filename) where the downloaded bytes will be written.
     num_chunks : int, default 4
         Number of chunks to download the file in (for large files).
+    session : aiohttp.ClientSession, optional
+        Session to use for requests.
 
     Returns
     -------
     None – all side‑effects happen inside this coroutine.
     """
+    if session is None:
+        session = get_session()
+        close_session = True
+    else:
+        close_session = False
+    
     try:
-        # 1️⃣  Ask for the remote size (HEAD)
-        async with aiohttp.ClientSession() as head_session:
-            head_resp = await head_session.head(url)          # ← only headers are fetched
-            if head_resp.status != 200:
-                logger.warning(f"HEAD {url} returned {head_resp.status}, skipping.")
-                return
-            remote_size = int(head_resp.headers.get('Content-Length', 0))
-            supports_ranges = head_resp.headers.get('Accept-Ranges', '').lower() == 'bytes'
+        # 1️⃣  Ask for the remote size (HEAD) with retry
+        async def head_request():
+            async with session.head(url) as head_resp:
+                if head_resp.status != 200:
+                    raise aiohttp.ClientError(f"HEAD {url} returned {head_resp.status}")
+                return head_resp
+        
+        head_resp = await retry_with_backoff(head_request)
+        remote_size = int(head_resp.headers.get('Content-Length', 0))
+        supports_ranges = head_resp.headers.get('Accept-Ranges', '').lower() == 'bytes'
         # 2️⃣  Make sure the parent folder exists (creates any missing part)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -111,16 +215,27 @@ async def _fetch_and_write(
 
         logger.debug(f"[fetch_and_write] Downloading {url} to {dest_path} (remote size: {remote_size} bytes)")
         # 4️⃣  Perform the download: use multipart if supported and file is large enough
-        if supports_ranges and remote_size > 1024 * 1024:  # e.g., >1MB
-            await _multipart_download(url, dest_path, remote_size, num_chunks)
+        if supports_ranges and remote_size > 1 * 1024 * 1024:  # e.g., >1MB (lower threshold for high-speed)
+            # Calculate optimal number of chunks based on file size and connection speed
+            # Note: aiohttp connector limits concurrent requests per host to 10
+            if remote_size > 100 * 1024 * 1024:  # >100MB
+                optimal_chunks = 10  # Limited by connector limit_per_host=10
+            elif remote_size > 20 * 1024 * 1024:  # >20MB
+                optimal_chunks = 8
+            elif remote_size > 5 * 1024 * 1024:  # >5MB
+                optimal_chunks = 6
+            else:
+                optimal_chunks = 4
+            await _multipart_download(url, dest_path, remote_size, optimal_chunks, session, progress_callback)
         else:
-            # Fallback to single GET
-            async with aiohttp.ClientSession() as get_session:
-                async with get_session.get(url) as resp:
+            # Fallback to single GET with retry
+            async def get_request():
+                async with session.get(url) as resp:
                     if resp.status != 200:
-                        logger.warning(f"GET {url} returned {resp.status}, skipping.")
-                        return
-                    data = await resp.read()
+                        raise aiohttp.ClientError(f"GET {url} returned {resp.status}")
+                    return await resp.read()
+            
+            data = await retry_with_backoff(get_request)
             async with aiofiles.open(dest_path, "wb") as f:
                 await f.write(data)
         logger.info(f"[fetch_and_write] Downloaded {dest_path} ({remote_size} bytes)")
@@ -133,6 +248,9 @@ async def _fetch_and_write(
     except Exception as e:
         logger.error(f"Unexpected error for {url}: {e}")
         return
+    finally:
+        if close_session:
+            await session.close()
 
 # ------------------------------------------------------------------
 #  _download_all()
@@ -164,33 +282,43 @@ async def _download_all(
     -------
     None – side‑effects happen inside this coroutine.
     """
-    # Create a semaphore that will allow *concurrency* tasks at once
-    sem = asyncio.Semaphore(concurrency)
+    # Create a shared session for all downloads
+    session = get_session()
+    try:
+        # Create a semaphore that will allow *concurrency* tasks at once
+        sem = asyncio.Semaphore(concurrency)
 
-    with tqdm_asyncio(total=len(items), desc="Downloading") as pbar:
-        for idx, item in enumerate(items):
-            url   = item["url"]
-            series = item.get("series", "0")
-            release = item.get("release","0")
+        with tqdm_asyncio(total=len(items), desc="Downloading") as pbar:
+            for idx, item in enumerate(items):
+                url   = item["url"]
+                series = item.get("series", "0")
+                release = item.get("release","0")
 
-            # Build the destination path
-            dest_path = (
-                base_dir
-                / f"rel-{release}"
-                / f"series-{series}"
-                / Path(url).name
-            )
-            # Start the download within the semaphore context
-            if callback:
-                callback(Path(url).name, "starting", 0)
-            async with sem:
-                await _fetch_and_write(url, dest_path)
-                # Call the optional callback
+                # Build the destination path
+                dest_path = (
+                    base_dir
+                    / f"rel-{release}"
+                    / f"series-{series}"
+                    / Path(url).name
+                )
+                # Start the download within the semaphore context
                 if callback:
-                    callback(Path(url).name, "progress", int((idx + 1) / len(items) * 100))
-                pbar.update(1)
-            if callback:
-                callback(Path(url).name, "finished", 100)
+                    callback(Path(url).name, "starting", 0)
+                async with sem:
+                    # Create a progress callback for this file
+                    def file_progress(pct):
+                        if callback:
+                            callback(Path(url).name, "progress", pct)
+                    
+                    await _fetch_and_write(url, dest_path, session=session, progress_callback=file_progress)
+                    # Call the optional callback
+                    if callback:
+                        callback(Path(url).name, "progress", int((idx + 1) / len(items) * 100))
+                    pbar.update(1)
+                if callback:
+                    callback(Path(url).name, "finished", 100)
+    finally:
+        await session.close()
 
 # ------------------------------------------------------------------
 #  download_from_json()

@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  3gpp-downloader:
+    build: .
+    ports:
+      - "32123:32123"
+    image: 3gpp-downloader:latest
+    volumes:
+      # Persist downloads and logs
+      - ./downloads:/app/downloads
+      - ./logs:/app/logs
+      # Mount source for development (optional)
+      - ./src:/app/src
+      - ./run_web.py:/app/run_web.py
+    environment:
+      - PYTHONPATH=/app/src
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:32123')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - gpp-network
+
+networks:
+  gpp-network:
+    driver: bridge
