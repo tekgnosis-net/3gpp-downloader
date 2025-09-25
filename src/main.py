@@ -15,6 +15,7 @@ from tools.monitored_pool import MonitoredPoolManager
 import logging
 from utils.logging_config import setup_logger
 import time
+from utils.json_downloader import download_from_json
 
 #configure logger
 logging_file = os.getenv('LOGGING_FILE', 'logs/downloader.log')
@@ -51,6 +52,32 @@ def cleanup(pool):
     logger.info(f"Cleaning up HTTPS connection pools at exit...")
     pool.clear()
     logger.info(f"Cleaned up HTTPS connection pools at exit...")
+
+def download_pdfs(input_file: str = 'latest.json', dest_dir: str = 'downloads/pdfs', concurrency: int = 5, callback=None) -> bool:
+    """
+    Downloads PDFs from the provided JSON file containing links.
+    
+    Args:
+        input_file (str): Path to the input JSON file (default: 'latest.json')
+        dest_dir (str): Directory to save the downloaded PDFs (default: 'downloads/pdfs')
+        concurrency (int): Number of concurrent downloads (default: 5)
+        callback (callable): Optional callback function to call after each download
+
+    Returns:
+        bool: True if downloads were successful, False otherwise
+    """
+    # Create the destination directory if it doesn't exist
+    dest_path = Path(dest_dir)
+    dest_path.mkdir(parents=True, exist_ok=True)
+
+    # Download the PDFs using the JSON downloader utility
+    return download_from_json(
+        src_file=input_file,
+        dest_dir=dest_path,
+        url_key="url",
+        concurrency=concurrency,
+        progress_callback=callback
+    )
 
 def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'latest.json') -> bool:
     """
@@ -133,7 +160,7 @@ def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log
 
     process = CrawlerProcess(settings={
         'FEEDS': {
-            'links.json': {'format': 'json', 'overwrite': True}
+            'downloads/links.json': {'format': 'json', 'overwrite': True}
         },
         'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'ROBOTSTXT_OBEY': True,
