@@ -29,13 +29,42 @@ logger = setup_logger('json_downloader', log_file=logging_file)
 __all__ = ["download_from_json"]
 
 # ------------------------------------------------------------------
+#  _download_chunk()
+# ------------------------------------------------------------------
+async def _download_chunk(url, start, end, session):
+    headers = {'Range': f'bytes={start}-{end}'}
+    async with session.get(url, headers=headers) as resp:
+        if resp.status != 206:  # Partial Content
+            raise aiohttp.ClientError(f"Range request failed: {resp.status}")
+        return await resp.read()
+
+# ------------------------------------------------------------------
+#  _multipart_download()
+# ------------------------------------------------------------------
+async def _multipart_download(url, dest_path, remote_size, num_chunks=4):
+    async with aiohttp.ClientSession() as session:
+        # Calculate chunk ranges
+        chunk_size = remote_size // num_chunks
+        ranges = [(i * chunk_size, (i + 1) * chunk_size - 1 if i < num_chunks - 1 else remote_size - 1)
+                  for i in range(num_chunks)]
+
+        # Download chunks concurrently
+        tasks = [_download_chunk(url, start, end, session) for start, end in ranges]
+        chunks = await asyncio.gather(*tasks)
+
+        # Write chunks in order
+        async with aiofiles.open(dest_path, 'wb') as f:
+            for chunk in chunks:
+                await f.write(chunk)
+
+# ------------------------------------------------------------------
 #  _fetch_and_write()
 # ------------------------------------------------------------------
 async def _fetch_and_write(
         url: str,
         dest_path: Path,
         *,
-        overwrite_if_diff: bool = True,   # keep this flag for future extensions
+        num_chunks: int = 10,
 ) -> None:
     """
     Download *url* and store it at *dest_path*.  
@@ -52,8 +81,8 @@ async def _fetch_and_write(
         The absolute or relative URL to fetch.
     dest_path : pathlib.Path
         Full path (including the filename) where the downloaded bytes will be written.
-    overwrite_if_diff : bool, default True
-        If True, a download is performed only when either the file does not exist or its size differs from the remote one.
+    num_chunks : int, default 4
+        Number of chunks to download the file in (for large files).
 
     Returns
     -------
@@ -67,6 +96,7 @@ async def _fetch_and_write(
                 logger.warning(f"HEAD {url} returned {head_resp.status}, skipping.")
                 return
             remote_size = int(head_resp.headers.get('Content-Length', 0))
+            supports_ranges = head_resp.headers.get('Accept-Ranges', '').lower() == 'bytes'
         # 2️⃣  Make sure the parent folder exists (creates any missing part)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -78,16 +108,19 @@ async def _fetch_and_write(
                 return
 
         logger.debug(f"[fetch_and_write] Downloading {url} to {dest_path} (remote size: {remote_size} bytes)")
-        # 4️⃣  Perform the real GET and write to disk
-        async with aiohttp.ClientSession() as get_session:
-            async with get_session.get(url) as resp:
-                if resp.status != 200:
-                    logger.warning(f"GET {url} returned {resp.status}, skipping.")
-                    return
-                data = await resp.read()
-
-        async with aiofiles.open(dest_path, "wb") as f:
-            await f.write(data)
+        # 4️⃣  Perform the download: use multipart if supported and file is large enough
+        if supports_ranges and remote_size > 1024 * 1024:  # e.g., >1MB
+            await _multipart_download(url, dest_path, remote_size, num_chunks)
+        else:
+            # Fallback to single GET
+            async with aiohttp.ClientSession() as get_session:
+                async with get_session.get(url) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"GET {url} returned {resp.status}, skipping.")
+                        return
+                    data = await resp.read()
+            async with aiofiles.open(dest_path, "wb") as f:
+                await f.write(data)
         logger.info(f"[fetch_and_write] Downloaded {dest_path} ({remote_size} bytes)")
     except aiohttp.ClientError as e:
         logger.error(f"aiohttp error for {url}: {e}")
@@ -166,7 +199,7 @@ async def download_from_json(
         url_key: str = "url",
         series_key: str = "series",
         release_key: str = "release",
-        concurrency: int = 8,
+        concurrency: int = 10,
         verbose: bool = True,
         progress_callback=None,
 ) -> None:
