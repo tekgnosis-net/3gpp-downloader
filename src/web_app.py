@@ -253,6 +253,73 @@ class AppState:
 
 app_state = AppState()
 
+def save_settings():
+    """Save current settings to a JSON file"""
+    settings_file = Path("web_settings.json")
+    try:
+        settings_data = {
+            # Download options
+            "resume_downloads": app_state.resume_downloads,
+            "no_download": app_state.no_download,
+            "download_all_versions": app_state.download_all_versions,
+            "organize_by_series": app_state.organize_by_series,
+            "specific_release": app_state.specific_release,
+            "thread_count": app_state.thread_count,
+            "verbose_logging": app_state.verbose_logging,
+            
+            # HTTP/Connection settings
+            "http_max_connections": app_state.http_max_connections,
+            "http_max_connections_per_host": app_state.http_max_connections_per_host,
+            "http_total_timeout": app_state.http_total_timeout,
+            "http_connect_timeout": app_state.http_connect_timeout,
+            "http_read_timeout": app_state.http_read_timeout,
+            
+            # UI settings
+            "show_advanced_settings": app_state.show_advanced_settings,
+            "current_tab": app_state.current_tab
+        }
+        
+        with open(settings_file, 'w') as f:
+            json.dump(settings_data, f, indent=2)
+        
+        add_log_message(f"Settings saved to {settings_file}")
+    except Exception as e:
+        add_log_message(f"Error saving settings: {str(e)}")
+
+def load_settings():
+    """Load settings from JSON file"""
+    settings_file = Path("web_settings.json")
+    try:
+        if settings_file.exists():
+            with open(settings_file, 'r') as f:
+                settings_data = json.load(f)
+            
+            # Load download options
+            app_state.resume_downloads = settings_data.get("resume_downloads", False)
+            app_state.no_download = settings_data.get("no_download", False)
+            app_state.download_all_versions = settings_data.get("download_all_versions", False)
+            app_state.organize_by_series = settings_data.get("organize_by_series", False)
+            app_state.specific_release = settings_data.get("specific_release", None)
+            app_state.thread_count = settings_data.get("thread_count", 5)
+            app_state.verbose_logging = settings_data.get("verbose_logging", False)
+            
+            # Load HTTP/Connection settings
+            app_state.http_max_connections = settings_data.get("http_max_connections", 100)
+            app_state.http_max_connections_per_host = settings_data.get("http_max_connections_per_host", 10)
+            app_state.http_total_timeout = settings_data.get("http_total_timeout", 300)
+            app_state.http_connect_timeout = settings_data.get("http_connect_timeout", 10)
+            app_state.http_read_timeout = settings_data.get("http_read_timeout", 60)
+            
+            # Load UI settings
+            app_state.show_advanced_settings = settings_data.get("show_advanced_settings", False)
+            app_state.current_tab = settings_data.get("current_tab", "dashboard")
+            
+            add_log_message(f"Settings loaded from {settings_file}")
+        else:
+            add_log_message("No settings file found, using defaults")
+    except Exception as e:
+        add_log_message(f"Error loading settings: {str(e)}")
+
 def add_log_message(message: str):
     """Add a message to the log"""
     timestamp = time.strftime("%H:%M:%S")
@@ -464,27 +531,33 @@ def switch_tab(tab_id: str):
 def toggle_resume_downloads(e: me.CheckboxChangeEvent):
     """Toggle resume downloads setting"""
     app_state.resume_downloads = e.checked
+    save_settings()
 
 def toggle_download_all_versions(e: me.CheckboxChangeEvent):
     """Toggle download all versions setting"""
     app_state.download_all_versions = e.checked
+    save_settings()
 
 def toggle_organize_by_series(e: me.CheckboxChangeEvent):
     """Toggle organize by series setting"""
     app_state.organize_by_series = e.checked
+    save_settings()
 
 def toggle_verbose_logging(e: me.CheckboxChangeEvent):
     """Toggle verbose logging setting"""
     app_state.verbose_logging = e.checked
+    save_settings()
 
 def toggle_advanced_settings(e: me.CheckboxChangeEvent):
     """Toggle advanced settings visibility"""
     app_state.show_advanced_settings = e.checked
+    save_settings()
 
 def on_thread_count_change(e: me.InputBlurEvent):
     """Handle thread count input change"""
     try:
         app_state.thread_count = max(1, min(20, int(e.value)))
+        save_settings()
     except ValueError:
         pass  # Keep current value if invalid
 
@@ -492,6 +565,7 @@ def on_max_connections_change(e: me.InputBlurEvent):
     """Handle max connections input change"""
     try:
         app_state.http_max_connections = max(1, min(1000, int(e.value)))
+        save_settings()
     except ValueError:
         pass
 
@@ -499,6 +573,7 @@ def on_max_connections_per_host_change(e: me.InputBlurEvent):
     """Handle max connections per host input change"""
     try:
         app_state.http_max_connections_per_host = max(1, min(100, int(e.value)))
+        save_settings()
     except ValueError:
         pass
 
@@ -506,6 +581,7 @@ def on_total_timeout_change(e: me.InputBlurEvent):
     """Handle total timeout input change"""
     try:
         app_state.http_total_timeout = max(10, min(3600, int(e.value)))
+        save_settings()
     except ValueError:
         pass
 
@@ -513,6 +589,7 @@ def on_connect_timeout_change(e: me.InputBlurEvent):
     """Handle connect timeout input change"""
     try:
         app_state.http_connect_timeout = max(1, min(300, int(e.value)))
+        save_settings()
     except ValueError:
         pass
 
@@ -1175,5 +1252,7 @@ def change_page(new_page: int):
     if 0 <= new_page < total_pages:
         app_state.current_page = new_page
 
-# Initialize available files on startup
+# Initialize available files and settings on startup
 load_available_files()
+load_settings()
+load_settings()
