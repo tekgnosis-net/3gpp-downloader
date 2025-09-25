@@ -31,8 +31,32 @@ docker compose up -d
 
 ### Option 2: Local Installation
 
+#### Using Virtual Environment (Recommended)
+
 ```bash
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+# On Linux/Mac:
+source venv/bin/activate
+# On Windows:
+# venv\Scripts\activate
+
 # Install dependencies
+pip install -r requirements.txt
+
+# Run web interface
+python run_web.py
+
+# Deactivate when done
+deactivate
+```
+
+#### Direct Installation (Not Recommended)
+
+```bash
+# Install dependencies globally (not recommended)
 pip install -r requirements.txt
 
 # Run web interface
@@ -149,6 +173,24 @@ Downloads and logs are persisted in Docker volumes:
 
 ## Development
 
+### Setup
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd 3gpp-downloader
+
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Optional: Install in development mode for local changes
+pip install -e .
+```
+
 ### Adding New Features
 
 1. CLI features go in `src/main.py`
@@ -159,9 +201,6 @@ Downloads and logs are persisted in Docker volumes:
 ### Testing
 
 ```bash
-# Install in development mode
-pip install -e .
-
 # Run tests
 python -m pytest
 
@@ -170,18 +209,32 @@ flake8 src/
 mypy src/
 ```
 
+### Virtual Environment Tips
+
+- Always activate the virtual environment before working: `source venv/bin/activate`
+- Install new dependencies with: `pip install package-name`
+- Save dependencies to requirements.txt: `pip freeze > requirements.txt`
+- Deactivate when done: `deactivate`
+
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Port 8080 already in use**
+1. **Virtual environment not activated**
+   ```bash
+   # Make sure to activate before running
+   source venv/bin/activate
+   python run_web.py
+   ```
+
+2. **Port 8080 already in use**
    ```bash
    # Change port in docker-compose.yml
    ports:
      - "8081:32123"
    ```
 
-2. **Permission errors**
+3. **Permission errors**
    ```bash
    # Fix permissions on downloads directory
    sudo chown -R $USER:$USER downloads/
