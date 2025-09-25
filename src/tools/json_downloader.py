@@ -59,28 +59,45 @@ async def _fetch_and_write(
     -------
     None – all side‑effects happen inside this coroutine.
     """
-    # 1️⃣  Ask for the remote size (HEAD)
-    async with aiohttp.ClientSession() as session:
-        head_resp = await session.head(url)          # ← only headers are fetched
-        remote_size = int(head_resp.headers['Content-Length'])
+    try:
+        # 1️⃣  Ask for the remote size (HEAD)
+        async with aiohttp.ClientSession() as head_session:
+            head_resp = await head_session.head(url)          # ← only headers are fetched
+            if head_resp.status != 200:
+                logger.warning(f"HEAD {url} returned {head_resp.status}, skipping.")
+                return
+            remote_size = int(head_resp.headers.get('Content-Length', 0))
+        # 2️⃣  Make sure the parent folder exists (creates any missing part)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 2️⃣  Make sure the parent folder exists (creates any missing part)
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
+        # 3️⃣  Skip or overwrite depending on local size
+        if dest_path.exists():
+            local_size = dest_path.stat().st_size
+            if local_size == remote_size:
+                logger.info(f"[fetch_and_write] Skipping {dest_path} (size matches)")
+                return
 
-    # 3️⃣  Skip or overwrite depending on local size
-    if dest_path.exists():
-        local_size = dest_path.stat().st_size
-        if local_size == remote_size:
-            logger.info(f"[fetch_and_write] Skipping {dest_path} (size matches)")
-            return
+        logger.debug(f"[fetch_and_write] Downloading {url} to {dest_path} (remote size: {remote_size} bytes)")
+        # 4️⃣  Perform the real GET and write to disk
+        async with aiohttp.ClientSession() as get_session:
+            async with get_session.get(url) as resp:
+                if resp.status != 200:
+                    logger.warning(f"GET {url} returned {resp.status}, skipping.")
+                    return
+                data = await resp.read()
 
-    logger.debug(f"[fetch_and_write] Downloading {url} to {dest_path} (remote size: {remote_size} bytes)")
-    # 4️⃣  Perform the real GET and write to disk
-    async with session.get(url) as resp:
-        data = await resp.read()
-
-    async with aiofiles.open(dest_path, "wb") as f:
-        await f.write(data)
+        async with aiofiles.open(dest_path, "wb") as f:
+            await f.write(data)
+        logger.info(f"[fetch_and_write] Downloaded {dest_path} ({remote_size} bytes)")
+    except aiohttp.ClientError as e:
+        logger.error(f"aiohttp error for {url}: {e}")
+        return
+    except RuntimeError as e:
+        logger.error(f"Runtime error (e.g., session closed) for {url}: {e}")
+        return
+    except Exception as e:
+        logger.error(f"Unexpected error for {url}: {e}")
+        return
 
 # ------------------------------------------------------------------
 #  _download_all()
@@ -138,7 +155,7 @@ async def _download_all(
                     callback(Path(url).name, "progress", int((idx + 1) / len(items) * 100))
                 pbar.update(1)
             if callback:
-                callback(Path(url).name, status="finished", percent=100)
+                callback(Path(url).name, "finished", 100)
 
 # ------------------------------------------------------------------
 #  download_from_json()
