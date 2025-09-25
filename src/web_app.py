@@ -359,7 +359,7 @@ def main_page():
         with me.box(
             style=me.Style(
                 background=Theme.SURFACE,
-                border_bottom=me.Border(bottom=me.BorderSide(width=1, color=Theme.OUTLINE_VARIANT)),
+                border=me.Border(bottom=me.BorderSide(width=1, color=Theme.OUTLINE_VARIANT)),
                 box_shadow=Theme.SHADOW_SM,
                 padding=me.Padding.symmetric(horizontal=Theme.SPACE_4, vertical=Theme.SPACE_3),
                 position="sticky",
@@ -571,15 +571,14 @@ def action_buttons():
     ]
 
     for label, icon, variant, callback, disabled in actions:
+        base_style = create_button_style(variant, "md")
+        base_style.opacity = 0.6 if disabled else 1
+        base_style.cursor = "not-allowed" if disabled else "pointer"
         me.button(
             label,
             on_click=callback,
             disabled=disabled,
-            style=me.Style(
-                **create_button_style(variant, "md")._asdict(),
-                opacity=0.6 if disabled else 1,
-                cursor="not-allowed" if disabled else "pointer"
-            )
+            style=base_style
         )
 
 def get_status_color(status: str) -> str:
