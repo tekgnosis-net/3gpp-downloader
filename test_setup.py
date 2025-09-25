@@ -75,7 +75,7 @@ def main():
     print("1. Install dependencies: pip install -r requirements.txt")
     print("2. Run web UI: python run_web.py")
     print("3. Or use Docker: docker-compose up -d")
-    print("4. Open browser: http://localhost:32123")
+    print("4. Open browser: http://localhost:8080")
 
 if __name__ == "__main__":
     main()

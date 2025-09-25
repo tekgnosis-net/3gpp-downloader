@@ -26,7 +26,7 @@ docker-compose up -d
 # Or with newer Docker versions:
 docker compose up -d
 
-# Open your browser to http://localhost:32123
+# Open your browser to http://localhost:8080
 ```
 
 ### Option 2: Local Installation
@@ -46,7 +46,7 @@ python -m src.main scrape download
 
 ### Web Interface
 
-1. Open http://localhost:32123 in your browser
+1. Open http://localhost:8080 in your browser
 2. Click "Start Scraping" to discover available specifications
 3. Click "Filter Latest Versions" to get the most recent documents
 4. Select files to download and click "Start Download"
@@ -114,7 +114,7 @@ The application automatically optimizes for your connection:
 docker build -t gpp-downloader .
 
 # Run the container
-docker run -p 32123:32123 -v $(pwd)/downloads:/app/downloads gpp-downloader
+docker run -p 8080:32123 -v $(pwd)/downloads:/app/downloads gpp-downloader
 
 # Or use Docker Compose
 docker-compose up -d
@@ -154,11 +154,11 @@ mypy src/
 
 ### Common Issues
 
-1. **Port 32123 already in use**
+1. **Port 8080 already in use**
    ```bash
    # Change port in docker-compose.yml
    ports:
-     - "32124:32123"
+     - "8081:32123"
    ```
 
 2. **Permission errors**

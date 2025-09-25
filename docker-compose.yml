@@ -4,7 +4,7 @@ services:
   3gpp-downloader:
     build: .
     ports:
-      - "32123:32123"
+      - "8080:32123"
     image: 3gpp-downloader:latest
     volumes:
       # Persist downloads and logs

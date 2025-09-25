@@ -18,6 +18,7 @@ def main():
 
         print("🚀 Starting 3GPP Downloader Web UI...")
         print("📱 Open your browser to: http://localhost:32123")
+        print("💡 When running with Docker, use: http://localhost:8080")
         print("❌ Press Ctrl+C to stop the server")
 
         # Start the Mesop web server
