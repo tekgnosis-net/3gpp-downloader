@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 from threading import Timer
 import signal
-from turtle import down
 from tools.etsi_spider import EtsiSpider
 from scrapy.crawler import CrawlerProcess
 from tools.monitored_pool import MonitoredPoolManager
@@ -26,26 +25,6 @@ logger = setup_logger('downloader', log_file=logging_file)
 def signal_handler(signum, frame):
     logger.info(f"Received signal {signum}, exiting gracefully...")
     sys.exit(0)
-
-def print_statistics(stats):
-    """
-    Print current download statistics
-    """
-    # Use a static variable to track if it's the initial call
-    if not hasattr(print_statistics, "initial_call"):
-        print_statistics.initial_call = True
-    if print_statistics.initial_call:
-        print_statistics.initial_call = False
-        logger.info(f"Starting periodic statistics printing every 15 seconds...")
-        return    
-    # stats is a dictionary with keys: request_count, error_count, error_rate
-    # Split the stats into individual variables for clarity
-    request_count = stats.get('request_count', 0)
-    error_count = stats.get('error_count', 0)
-    error_rate = stats.get('error_rate', 0.0)
-    logger.info(f"Current download stats: Requests: {request_count}, Errors: {error_count}, Error Rate: {error_rate:.2%}")
-    # Log the complete stats dictionary for debugging
-    logger.debug(f"Current download stats: {stats}")
 
 def cleanup(pool):
     """
@@ -72,15 +51,15 @@ def download_pdfs(input_file: str = 'latest.json', dest_dir: str = 'downloads/pd
     dest_path = Path(dest_dir)
     dest_path.mkdir(parents=True, exist_ok=True)
 
-    # Download the PDFs using the JSON downloader utility
+        # Download the PDFs using the JSON downloader utility
     import asyncio
-    return asyncio.run(download_from_json(
-        json_path=input_file,
-        root_dir=dest_path,
-        max_concurrent=concurrency,
-        progress=True,
-        callback=callback
+    asyncio.run(download_from_json(
+        src_file=input_file,
+        dest_dir=str(dest_path),
+        concurrency=concurrency,
+        progress_callback=callback
     ))
+    return True
 
 def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'latest.json') -> bool:
     """
@@ -142,7 +121,7 @@ def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'l
     return True
 
 # Function to invoke the scrapy class and trigger the scraping
-def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log'):
+def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log') -> dict:
     """
     Function to invoke the scrapy class and trigger the scraping
     """
@@ -183,6 +162,37 @@ def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log
     end_time = time.time()
     elapsed = end_time - start_time
     logger.info(f"Scraping completed in {elapsed:.2f} seconds.")
+    # find the last log entry with stats and print it
+    if Path(logfile).exists():
+        with open(logfile, 'r') as f:
+            lines = f.readlines()
+            for line in reversed(lines):
+                if re.search(r'Crawled \d+ pages', line):
+                    logger.info(f"Scraper stats: {line.strip()}")
+                    break
+    # Check if logfile exists and grab the stat line: Dumping Scrapy stats and return it as a dict for further processing if needed else send an empty dict
+    if Path(logfile).exists():
+        with open(logfile, 'r') as f:
+            lines = f.readlines()
+            for line in reversed(lines):
+                if re.search(r'Dumping Scrapy stats:', line):
+                    logger.info(f"Scrapy stats: {line.strip()}")
+                    # Extract the JSON stats block
+                    json_stats = []
+                    for line in lines[lines.index(line) + 1:]:
+                        if line.strip() == "":
+                            break
+                        json_stats.append(line.strip())
+                    # Parse the JSON stats
+                    try:
+                        stats = json.loads("\n".join(json_stats))
+                        logger.info(f"Parsed Scrapy stats: {stats}")
+                        return stats
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse Scrapy stats: {e}")
+                        return {}
+    logger.warning("No Scrapy stats found.")
+    return {}
 
 def main(args):
     """
@@ -200,23 +210,18 @@ def main(args):
         None
     """
 
+    # make sure downloads directory exists
+    Path('downloads').mkdir(parents=True, exist_ok=True)
+    # make sure logs directory exists
+    Path('logs').mkdir(parents=True, exist_ok=True)
+
     if args.verbose:
         logger.setLevel(logging.DEBUG)
     if args.nodownload:
         logger.info("No download mode activated.")
     # Add more logic here as needed to handle downloading based on args
     logger.info(f"Arguments received: {args}")
-    # Initialize the monitored pool manager
-    pool_manager = MonitoredPoolManager(logging_level=logging.DEBUG if args.verbose else logging.INFO, maxsize=args.threads)
-    # Register cleanup function to be called at exit
-    atexit.register(cleanup, pool_manager)
-    # set up periodic statistics printing every 15 seconds
-    stats_timer = Timer(15, print_statistics, args=(pool_manager.get_stats(),))
-    stats_timer.start()
-    # Ensure the timer is cancelled at exit
-    atexit.register(stats_timer.cancel)
-    # Log initial stats
-    print_statistics(pool_manager.get_stats())
+    
     # set up signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -224,13 +229,13 @@ def main(args):
     if args.resume:
         logger.info("Resume mode activated. Exiting after downloading previously scraped links.")
         # In resume mode, skip scraping and just download from existing links.json or latest.json
-        if Path('links.json').exists() or Path('latest.json').exists():
+        if Path('downloads/links.json').exists() or Path('downloads/latest.json').exists():
             if not args.all:
-                if Path('links.json').exists():
-                    if filter_latest_versions(input_file='links.json', output_file='latest.json'):
+                if Path('downloads/links.json').exists():
+                    if filter_latest_versions(input_file='downloads/links.json', output_file='downloads/latest.json'):
                         logger.info("Resume mode - Filtered to latest versions successfully.")
                         if download_pdfs(
-                            input_file='latest.json', 
+                            input_file='downloads/latest.json', 
                             dest_dir='downloads/By-Release' if not args.series else 'downloads/By-Series', 
                             concurrency=args.threads, 
                             callback=lambda fn, status, pct: logger.info(f"✓ {fn} {status} at {pct}%")
@@ -246,17 +251,17 @@ def main(args):
                     else:
                         logger.error("Resume mode - Failed to filter to latest versions.")
                         sys.exit(1)
-                elif Path('latest.json').exists():
+                elif Path('downloads/latest.json').exists():
                     if download_pdfs(
-                        input_file='latest.json', 
+                        input_file='downloads/latest.json', 
                         dest_dir='downloads/By-Release' if not args.series else 'downloads/By-Series', 
                         concurrency=args.threads, 
                         callback=lambda fn, status, pct: logger.info(f"✓ {fn} {status} at {pct}%")
                         ):
                         logger.info("Resume mode - Download completed successfully.")
                         # delete links and latest files
-                        Path('links.json').unlink(missing_ok=True)
-                        Path('latest.json').unlink(missing_ok=True)
+                        Path('downloads/links.json').unlink(missing_ok=True)
+                        Path('downloads/latest.json').unlink(missing_ok=True)
                         sys.exit(0)
                     else:
                         logger.error("Resume mode - Download failed.")
@@ -264,18 +269,18 @@ def main(args):
 
             else:
                 logger.info("Resume mode - Downloading all versions as per --all flag; skipping filtering.")
-                if not Path('links.json').exists():
+                if not Path('downloads/links.json').exists():
                     logger.error("links.json does not exist for downloading all versions.")
                     try:
                         run_scraper(logging_lvl=logging.DEBUG if args.verbose else logging.INFO)
                     except Exception as e:
                         logger.error(f"Error running scraper: {e}") 
                         sys.exit(1)
-                if not Path('links.json').exists():
+                if not Path('downloads/links.json').exists():
                     logger.error("links.json does not exist after scraping.")
                     sys.exit(1)
                 download_pdfs(
-                    input_file='links.json', 
+                    input_file='downloads/links.json', 
                     dest_dir='downloads/By-Release' if not args.series else 'downloads/By-Series', 
                     concurrency=args.threads, 
                     callback=lambda fn, status, pct: logger.info(f"✓ {fn} {status} at {pct}%")) 
@@ -289,7 +294,7 @@ def main(args):
     
     # After scraping, filter to keep only the latest versions
     if not args.all:
-        if filter_latest_versions(input_file='links.json', output_file='latest.json'):
+        if filter_latest_versions(input_file='downloads/links.json', output_file='downloads/latest.json'):
             logger.info("Filtered to latest versions successfully.")
         else:
             logger.error("Failed to filter to latest versions.")
@@ -302,16 +307,18 @@ def main(args):
     if not args.nodownload and not args.resume: 
         logger.info("Starting download process...")
         if download_pdfs(
-            input_file='latest.json' if not args.all else 'links.json', 
+            input_file='downloads/latest.json' if not args.all else 'downloads/links.json', 
             dest_dir='downloads/By-Release' if not args.series else 'downloads/By-Series', 
             concurrency=args.threads, 
             callback=lambda fn, status, pct: logger.info(f"✓ {fn} {status} at {pct}%")):
             logger.info("Download process completed successfully.")
+            # delete links and latest files
+            Path('downloads/links.json').unlink(missing_ok=True)
+            Path('downloads/latest.json').unlink(missing_ok=True)
+            sys.exit(0)
         else:            
             logger.error("Download process encountered errors.")
-        logger.info("Download process completed.")
-
-    stats_timer.cancel()
+            sys.exit(1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

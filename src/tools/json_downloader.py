@@ -115,7 +115,7 @@ async def _download_all(
     # Create a semaphore that will allow *concurrency* tasks at once
     sem = asyncio.Semaphore(concurrency)
 
-    async with tqdm_asyncio(total=len(items), desc="Downloading") as pbar:
+    with tqdm_asyncio(total=len(items), desc="Downloading") as pbar:
         for idx, item in enumerate(items):
             url   = item["url"]
             series = item.get("series", "0")
@@ -130,12 +130,12 @@ async def _download_all(
             )
             # Start the download within the semaphore context
             if callback:
-                callback(Path(url).name, status="starting", percent=0)
+                callback(Path(url).name, "starting", 0)
             async with sem:
                 await _fetch_and_write(url, dest_path)
                 # Call the optional callback
                 if callback:
-                    callback(Path(url).name, status="progress", percent=int((idx + 1) / len(items) * 100))
+                    callback(Path(url).name, "progress", int((idx + 1) / len(items) * 100))
                 pbar.update(1)
             if callback:
                 callback(Path(url).name, status="finished", percent=100)
