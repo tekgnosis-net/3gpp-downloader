@@ -586,12 +586,12 @@ def status_card(title: str, status: str, progress: float, icon: str):
             # Progress bar for running operations
             if status == "running" and progress > 0:
                 with me.box(style=me.Style(width="100%", margin=me.Margin(top=Theme.SPACE_2))):
-                    me.progress_bar(
-                        value=progress,
-                        mode="determinate",
-                        color="primary",
-                        style=me.Style(height=6, border_radius=Theme.RADIUS_SM)
-                    )
+                    with me.box(style=me.Style(height=6, border_radius=Theme.RADIUS_SM)):
+                        me.progress_bar(
+                            value=progress,
+                            mode="determinate",
+                            color="primary"
+                        )
                     me.text(f"{progress:.1f}%", style=me.Style(
                         font_size=Theme.FONT_SIZE_CAPTION,
                         color=Theme.ON_SURFACE_VARIANT,
