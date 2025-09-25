@@ -2,16 +2,28 @@
 import scrapy
 import re
 import logging
+import os
 from utils.logging_config import setup_logger
 #configure logger
-logging_file = 'logs/etsi_spider.log'
-logger = setup_logger('etsi_spider', log_file=logging_file)
+logging_file = os.getenv('ETSI_SPIDER_LOG_FILE', 'logs/etsi_spider.log')
+logger_name = os.getenv('ETSI_SPIDER_LOGGER_NAME', 'etsi_spider')
+console_level = getattr(logging, os.getenv('ETSI_SPIDER_CONSOLE_LEVEL', 'INFO').upper(), logging.INFO)
+file_level = getattr(logging, os.getenv('ETSI_SPIDER_FILE_LEVEL', 'DEBUG').upper(), logging.DEBUG)
+max_bytes = int(os.getenv('ETSI_SPIDER_MAX_BYTES', '10485760'))
+backup_count = int(os.getenv('ETSI_SPIDER_BACKUP_COUNT', '5'))
+
+logger = setup_logger(logger_name, log_file=logging_file, console_level=console_level, logfile_level=file_level, max_bytes=max_bytes, backup_count=backup_count)
 
 class EtsiSpider(scrapy.Spider):
     name = 'etsi'
-    start_urls = ['https://www.etsi.org/deliver/etsi_ts/']
-    # For quick testing, uncomment the line below to limit to series 23 range (has Release 15+ PDFs), then run and check logs/links.json
-    # start_urls = ['https://www.etsi.org/deliver/etsi_ts/123500_123599/']
+    start_urls = os.getenv('ETSI_START_URLS', 'https://www.etsi.org/deliver/etsi_ts/').split(',')
+
+    # Custom settings for the spider
+    custom_settings = {
+        'DOWNLOAD_DELAY': float(os.getenv('SCRAPY_DOWNLOAD_DELAY', '0.1')),
+        'CONCURRENT_REQUESTS_PER_DOMAIN': int(os.getenv('SCRAPY_CONCURRENT_REQUESTS_PER_DOMAIN', '8')),
+        'USER_AGENT': os.getenv('SCRAPY_USER_AGENT', '3gpp-downloader/1.0'),
+    }
 
 
     def parse(self, response):
@@ -43,8 +55,14 @@ class EtsiSpider(scrapy.Spider):
         series = ts_dir[1:3]
         try:
             series_int = int(series)
-            if not (21 <= series_int <= 39):  # Focus on 3GPP series 21-39
-                return
+            focus_series = os.getenv('ETSI_FOCUS_SERIES', '21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39')
+            if focus_series:
+                allowed_series = [int(s.strip()) for s in focus_series.split(',')]
+                if series_int not in allowed_series:
+                    return
+            else:
+                # If no focus series specified, allow all
+                pass
         except ValueError:
             logger.error(f'Invalid TS dir: {ts_dir}')
             return
@@ -62,7 +80,8 @@ class EtsiSpider(scrapy.Spider):
                     parts = v_part.split('.')
                     if len(parts) == 3:
                         major, minor, editorial = map(int, parts)
-                        if major >= 15:
+                        min_release = int(os.getenv('ETSI_MIN_RELEASE', '15'))
+                        if major >= min_release:
                             meta = {
                                 'series': series,
                                 'release': major,

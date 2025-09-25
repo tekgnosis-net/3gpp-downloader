@@ -11,8 +11,19 @@ import asyncio
 import threading
 from typing import List, Dict, Optional
 import time
+import os
+import logging
+from utils.logging_config import setup_logger
 
-# Import existing functionality
+# Configure logger for web app
+logging_file = os.getenv('WEB_APP_LOG_FILE', 'logs/web_app.log')
+logger_name = os.getenv('WEB_APP_LOGGER_NAME', 'web_app')
+console_level = getattr(logging, os.getenv('WEB_APP_CONSOLE_LEVEL', 'INFO').upper(), logging.INFO)
+file_level = getattr(logging, os.getenv('WEB_APP_FILE_LEVEL', 'INFO').upper(), logging.INFO)
+max_bytes = int(os.getenv('WEB_APP_MAX_BYTES', '10485760'))
+backup_count = int(os.getenv('WEB_APP_BACKUP_COUNT', '5'))
+
+web_logger = setup_logger(logger_name, log_file=logging_file, console_level=console_level, logfile_level=file_level, max_bytes=max_bytes, backup_count=backup_count)
 from main import scrape_data, filter_latest_versions, download_data
 
 # Global state for tracking operations
@@ -51,7 +62,7 @@ def update_download_progress(progress: float, message: str = ""):
         app_state.current_operation = message
         add_log_message(message)
 
-@me.page(path="/", title="3GPP Downloader")
+@me.page(path="/", title=os.getenv('WEB_TITLE', '3GPP Downloader'))
 def main_page():
     """Main page of the 3GPP Downloader web UI"""
     with me.box(style=me.Style(padding=me.Padding.all(20))):
@@ -123,7 +134,8 @@ def main_page():
             me.text("Activity Log", style=me.Style(font_size=18, font_weight="bold"))
 
             with me.box(style=me.Style(max_height=200, overflow_y="auto", background="#f5f5f5", padding=me.Padding.all(10), font_family="monospace", font_size=12)):
-                for log_msg in app_state.log_messages[-20:]:  # Show last 20 messages
+                max_messages = int(os.getenv('WEB_MAX_LOG_MESSAGES', '100'))
+                for log_msg in app_state.log_messages[-max_messages:]:  # Show last N messages
                     me.text(log_msg)
 
 def status_indicator(status: str):

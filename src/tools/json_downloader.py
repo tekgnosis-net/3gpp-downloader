@@ -15,6 +15,7 @@ Author: KK (2025‑09‑25)
 # ────── Imports ──────
 import asyncio
 import logging
+import os
 from pathlib import Path
 import json
 
@@ -23,8 +24,14 @@ import aiofiles         # async file I/O
 from tqdm.asyncio import tqdm_asyncio   # progress bar that works inside an event loop
 from utils.logging_config import setup_logger
 #configure logger
-logging_file = 'logs/json_downloader.log'
-logger = setup_logger('json_downloader', log_file=logging_file)
+logging_file = os.getenv('JSON_DOWNLOADER_LOG_FILE', 'logs/json_downloader.log')
+logger_name = os.getenv('JSON_DOWNLOADER_LOGGER_NAME', 'json_downloader')
+console_level = getattr(logging, os.getenv('JSON_DOWNLOADER_CONSOLE_LEVEL', 'INFO').upper(), logging.INFO)
+file_level = getattr(logging, os.getenv('JSON_DOWNLOADER_FILE_LEVEL', 'DEBUG').upper(), logging.DEBUG)
+max_bytes = int(os.getenv('JSON_DOWNLOADER_MAX_BYTES', '10485760'))
+backup_count = int(os.getenv('JSON_DOWNLOADER_BACKUP_COUNT', '5'))
+
+logger = setup_logger(logger_name, log_file=logging_file, console_level=console_level, logfile_level=file_level, max_bytes=max_bytes, backup_count=backup_count)
 
 __all__ = ["download_from_json"]
 
@@ -36,19 +43,23 @@ def get_connector():
     if _connector is None:
         # Create connector with connection pooling
         _connector = aiohttp.TCPConnector(
-            limit=100,  # Max connections
-            limit_per_host=10,  # Max connections per host
-            ttl_dns_cache=300,  # DNS cache TTL
-            use_dns_cache=True,
-            keepalive_timeout=60,
-            enable_cleanup_closed=True,
+            limit=int(os.getenv('HTTP_MAX_CONNECTIONS', '100')),  # Max connections
+            limit_per_host=int(os.getenv('HTTP_MAX_CONNECTIONS_PER_HOST', '10')),  # Max connections per host
+            ttl_dns_cache=int(os.getenv('HTTP_DNS_CACHE_TTL', '300')),  # DNS cache TTL
+            use_dns_cache=os.getenv('HTTP_USE_DNS_CACHE', 'true').lower() == 'true',
+            keepalive_timeout=int(os.getenv('HTTP_KEEPALIVE_TIMEOUT', '60')),
+            enable_cleanup_closed=os.getenv('HTTP_ENABLE_CLEANUP_CLOSED', 'true').lower() == 'true',
         )
     return _connector
 
 def get_session():
     return aiohttp.ClientSession(
         connector=get_connector(),
-        timeout=aiohttp.ClientTimeout(total=300, connect=10, sock_read=60)  # 5 min total, 10s connect, 60s read
+        timeout=aiohttp.ClientTimeout(
+            total=float(os.getenv('HTTP_TOTAL_TIMEOUT', '300')),
+            connect=float(os.getenv('HTTP_CONNECT_TIMEOUT', '10')),
+            sock_read=float(os.getenv('HTTP_READ_TIMEOUT', '60'))
+        )
     )
 
 async def cleanup():
@@ -61,8 +72,15 @@ async def cleanup():
 # ------------------------------------------------------------------
 #  Retry utilities
 # ------------------------------------------------------------------
-async def retry_with_backoff(func, *args, max_retries=5, base_delay=1.0, max_delay=60.0, **kwargs):
+async def retry_with_backoff(func, *args, max_retries=None, base_delay=None, max_delay=None, **kwargs):
     """Retry a function with exponential backoff"""
+    if max_retries is None:
+        max_retries = int(os.getenv('RETRY_MAX_ATTEMPTS', '5'))
+    if base_delay is None:
+        base_delay = float(os.getenv('RETRY_BASE_DELAY', '1.0'))
+    if max_delay is None:
+        max_delay = float(os.getenv('RETRY_MAX_DELAY', '60.0'))
+
     delay = base_delay
     for attempt in range(max_retries + 1):
         try:
@@ -215,17 +233,27 @@ async def _fetch_and_write(
 
         logger.debug(f"[fetch_and_write] Downloading {url} to {dest_path} (remote size: {remote_size} bytes)")
         # 4️⃣  Perform the download: use multipart if supported and file is large enough
-        if supports_ranges and remote_size > 1 * 1024 * 1024:  # e.g., >1MB (lower threshold for high-speed)
+        multipart_min_size = int(os.getenv('DOWNLOAD_MULTIPART_MIN_SIZE_MB', '1')) * 1024 * 1024
+        if supports_ranges and remote_size > multipart_min_size:
             # Calculate optimal number of chunks based on file size and connection speed
             # Note: aiohttp connector limits concurrent requests per host to 10
-            if remote_size > 100 * 1024 * 1024:  # >100MB
-                optimal_chunks = 10  # Limited by connector limit_per_host=10
-            elif remote_size > 20 * 1024 * 1024:  # >20MB
-                optimal_chunks = 8
-            elif remote_size > 5 * 1024 * 1024:  # >5MB
-                optimal_chunks = 6
+            threshold_1 = int(os.getenv('DOWNLOAD_CHUNK_THRESHOLD_1_MB', '5')) * 1024 * 1024
+            threshold_2 = int(os.getenv('DOWNLOAD_CHUNK_THRESHOLD_2_MB', '10')) * 1024 * 1024
+            threshold_3 = int(os.getenv('DOWNLOAD_CHUNK_THRESHOLD_3_MB', '20')) * 1024 * 1024
+            threshold_4 = int(os.getenv('DOWNLOAD_CHUNK_THRESHOLD_4_MB', '50')) * 1024 * 1024
+            threshold_5 = int(os.getenv('DOWNLOAD_CHUNK_THRESHOLD_5_MB', '100')) * 1024 * 1024
+
+            if remote_size > threshold_5:
+                optimal_chunks = int(os.getenv('DOWNLOAD_CHUNK_COUNT_5', '10'))
+            elif remote_size > threshold_4:
+                optimal_chunks = int(os.getenv('DOWNLOAD_CHUNK_COUNT_4', '10'))
+            elif remote_size > threshold_3:
+                optimal_chunks = int(os.getenv('DOWNLOAD_CHUNK_COUNT_3', '8'))
+            elif remote_size > threshold_2:
+                optimal_chunks = int(os.getenv('DOWNLOAD_CHUNK_COUNT_2', '6'))
             else:
-                optimal_chunks = 4
+                optimal_chunks = int(os.getenv('DOWNLOAD_CHUNK_COUNT_1', '4'))
+
             await _multipart_download(url, dest_path, remote_size, optimal_chunks, session, progress_callback)
         else:
             # Fallback to single GET with retry

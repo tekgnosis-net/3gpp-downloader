@@ -20,8 +20,14 @@ from tools.json_downloader import download_from_json
 
 
 #configure logger
-logging_file = os.getenv('LOGGING_FILE', 'logs/downloader.log')
-logger = setup_logger('downloader', log_file=logging_file)
+logging_file = os.getenv('MAIN_LOG_FILE', os.getenv('LOGGING_FILE', 'logs/downloader.log'))
+logger_name = os.getenv('MAIN_LOGGER_NAME', 'downloader')
+console_level = getattr(logging, os.getenv('MAIN_CONSOLE_LEVEL', 'INFO').upper(), logging.INFO)
+file_level = getattr(logging, os.getenv('MAIN_FILE_LEVEL', 'DEBUG').upper(), logging.DEBUG)
+max_bytes = int(os.getenv('MAIN_MAX_BYTES', '10485760'))
+backup_count = int(os.getenv('MAIN_BACKUP_COUNT', '5'))
+
+logger = setup_logger(logger_name, log_file=logging_file, console_level=console_level, logfile_level=file_level, max_bytes=max_bytes, backup_count=backup_count)
 
 def signal_handler(signum, frame):
     logger.info(f"Received signal {signum}, exiting gracefully...")
@@ -142,10 +148,10 @@ def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log
         'FEEDS': {
             'downloads/links.json': {'format': 'json', 'overwrite': True}
         },
-        'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'USER_AGENT': os.getenv('SCRAPY_USER_AGENT', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'),
         'ROBOTSTXT_OBEY': True,
-        'CONCURRENT_REQUESTS': 32,  # Increased for speed; reduce if rate-limited
-        'DOWNLOAD_DELAY': 0.1,  # Small delay between requests to be respectful
+        'CONCURRENT_REQUESTS': int(os.getenv('SCRAPY_CONCURRENT_REQUESTS_PER_DOMAIN', '32')),
+        'DOWNLOAD_DELAY': float(os.getenv('SCRAPY_DOWNLOAD_DELAY', '0.1')),
         'LOG_ENABLED': True,
         'LOG_FILE': logfile,
         'LOG_LEVEL': logging_lvl,

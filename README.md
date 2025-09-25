@@ -94,16 +94,36 @@ python -m src.main filter
 
 ### Environment Variables
 
-- `PYTHONPATH=/app/src` - Python module path
-- `PYTHONUNBUFFERED=1` - Disable output buffering
+The application supports extensive configuration through environment variables. Copy `.env.example` to `.env` and modify values as needed:
 
-### Download Settings
+```bash
+cp .env.example .env
+# Edit .env with your preferred settings
+```
 
-The application automatically optimizes for your connection:
-- **1GB connections**: Up to 10 simultaneous chunks
-- **Lower speeds**: 4-8 chunks based on file size
-- **Connection pooling**: 100 total, 10 per host
-- **Retry logic**: 5 attempts with exponential backoff
+#### Key Configuration Areas:
+
+- **Logging**: Separate log levels and files for each module
+- **HTTP Client**: Connection pooling, timeouts, retry logic
+- **Download**: Chunk sizes, multipart thresholds
+- **Scrapy**: Request delays, concurrency limits
+- **Web UI**: Port, logging, display options
+
+### Command Line Arguments
+
+```bash
+# Full pipeline: scrape and download
+python -m src.main scrape download
+
+# Only scrape for links
+python -m src.main scrape
+
+# Only download from existing links.json
+python -m src.main download
+
+# Filter to latest versions only
+python -m src.main filter
+```
 
 ## Docker Deployment
 

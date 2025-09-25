@@ -10,8 +10,14 @@ from pathlib import Path
 from utils.logging_config import setup_logger
 
 #configure logger
-logging_file = os.getenv('LOGGING_FILE', 'downloader.log')
-logger = setup_logger('downloader', log_file=logging_file)
+logging_file = os.getenv('MONITORED_POOL_LOG_FILE', os.getenv('LOGGING_FILE', 'logs/monitored_pool.log'))
+logger_name = os.getenv('MONITORED_POOL_LOGGER_NAME', 'downloader')
+console_level = getattr(logging, os.getenv('MONITORED_POOL_CONSOLE_LEVEL', 'INFO').upper(), logging.INFO)
+file_level = getattr(logging, os.getenv('MONITORED_POOL_FILE_LEVEL', 'DEBUG').upper(), logging.DEBUG)
+max_bytes = int(os.getenv('MONITORED_POOL_MAX_BYTES', '10485760'))
+backup_count = int(os.getenv('MONITORED_POOL_BACKUP_COUNT', '5'))
+
+logger = setup_logger(logger_name, log_file=logging_file, console_level=console_level, logfile_level=file_level, max_bytes=max_bytes, backup_count=backup_count)
 
 class MonitoredPoolManager:
     """
@@ -29,7 +35,7 @@ class MonitoredPoolManager:
         self.maxsize = maxsize
         self.retries = retries if retries else Retry(total=5, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
         self.logging_level = logging_level
-        
+
         logger.setLevel(self.logging_level)
 
         logger.debug(f'Initializing MonitoredPoolManager with base_url: {self.base_url}, timeout: {self.timeout}, maxsize: {self.maxsize}, retries: {self.retries}')
