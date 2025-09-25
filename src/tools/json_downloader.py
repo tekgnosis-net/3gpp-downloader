@@ -32,6 +32,7 @@ __all__ = ["download_from_json"]
 #  _download_chunk()
 # ------------------------------------------------------------------
 async def _download_chunk(url, start, end, session):
+    logger.info(f"[download_chunk] Downloading bytes {start}-{end} from {url}")
     headers = {'Range': f'bytes={start}-{end}'}
     async with session.get(url, headers=headers) as resp:
         if resp.status != 206:  # Partial Content
@@ -42,6 +43,7 @@ async def _download_chunk(url, start, end, session):
 #  _multipart_download()
 # ------------------------------------------------------------------
 async def _multipart_download(url, dest_path, remote_size, num_chunks=4):
+    logger.info(f"[multipart_download] Using multi-part download for {dest_path} with {num_chunks} chunks")
     async with aiohttp.ClientSession() as session:
         # Calculate chunk ranges
         chunk_size = remote_size // num_chunks
