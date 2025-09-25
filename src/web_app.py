@@ -461,6 +461,61 @@ def switch_tab(tab_id: str):
     """Switch to a different tab"""
     app_state.current_tab = tab_id
 
+def toggle_resume_downloads(e: me.CheckboxChangeEvent):
+    """Toggle resume downloads setting"""
+    app_state.resume_downloads = e.checked
+
+def toggle_download_all_versions(e: me.CheckboxChangeEvent):
+    """Toggle download all versions setting"""
+    app_state.download_all_versions = e.checked
+
+def toggle_organize_by_series(e: me.CheckboxChangeEvent):
+    """Toggle organize by series setting"""
+    app_state.organize_by_series = e.checked
+
+def toggle_verbose_logging(e: me.CheckboxChangeEvent):
+    """Toggle verbose logging setting"""
+    app_state.verbose_logging = e.checked
+
+def toggle_advanced_settings(e: me.CheckboxChangeEvent):
+    """Toggle advanced settings visibility"""
+    app_state.show_advanced_settings = e.checked
+
+def on_thread_count_change(e: me.InputBlurEvent):
+    """Handle thread count input change"""
+    try:
+        app_state.thread_count = max(1, min(20, int(e.value)))
+    except ValueError:
+        pass  # Keep current value if invalid
+
+def on_max_connections_change(e: me.InputBlurEvent):
+    """Handle max connections input change"""
+    try:
+        app_state.http_max_connections = max(1, min(1000, int(e.value)))
+    except ValueError:
+        pass
+
+def on_max_connections_per_host_change(e: me.InputBlurEvent):
+    """Handle max connections per host input change"""
+    try:
+        app_state.http_max_connections_per_host = max(1, min(100, int(e.value)))
+    except ValueError:
+        pass
+
+def on_total_timeout_change(e: me.InputBlurEvent):
+    """Handle total timeout input change"""
+    try:
+        app_state.http_total_timeout = max(10, min(3600, int(e.value)))
+    except ValueError:
+        pass
+
+def on_connect_timeout_change(e: me.InputBlurEvent):
+    """Handle connect timeout input change"""
+    try:
+        app_state.http_connect_timeout = max(1, min(300, int(e.value)))
+    except ValueError:
+        pass
+
 def dashboard_content():
     """Dashboard tab content with modern design"""
     # Status overview cards
@@ -624,7 +679,7 @@ def get_status_icon(status: str) -> str:
     return status_icons.get(status, "help")
 
 def settings_content():
-    """Settings tab content"""
+    """Settings tab content with configuration options"""
     with me.box(style=create_card_style("md")):
         me.text("Settings", style=me.Style(
             font_size=Theme.FONT_SIZE_H3,
@@ -632,10 +687,166 @@ def settings_content():
             margin=me.Margin(bottom=Theme.SPACE_4),
             color=Theme.ON_SURFACE
         ))
-        me.text("Settings panel coming soon...", style=me.Style(
-            font_size=Theme.FONT_SIZE_BODY,
-            color=Theme.ON_SURFACE_VARIANT
+
+        # Download Options
+        me.text("Download Options", style=me.Style(
+            font_size=Theme.FONT_SIZE_H4,
+            font_weight=Theme.FONT_WEIGHT_MEDIUM,
+            margin=me.Margin(bottom=Theme.SPACE_3),
+            color=Theme.ON_SURFACE
         ))
+
+        with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_3)):
+            # Resume Downloads
+            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                me.checkbox(
+                    label="Resume Downloads",
+                    checked=int(app_state.resume_downloads),
+                    on_change=toggle_resume_downloads,
+                    style=me.Style(color=Theme.ON_SURFACE)
+                )
+
+            # Download All Versions
+            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                me.checkbox(
+                    label="Download All Versions",
+                    checked=int(app_state.download_all_versions),
+                    on_change=toggle_download_all_versions,
+                    style=me.Style(color=Theme.ON_SURFACE)
+                )
+
+            # Organize by Series
+            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                me.checkbox(
+                    label="Organize by Series",
+                    checked=int(app_state.organize_by_series),
+                    on_change=toggle_organize_by_series,
+                    style=me.Style(color=Theme.ON_SURFACE)
+                )
+
+        # Thread Count
+        me.text("Performance Settings", style=me.Style(
+            font_size=Theme.FONT_SIZE_H4,
+            font_weight=Theme.FONT_WEIGHT_MEDIUM,
+            margin=me.Margin(top=Theme.SPACE_4, bottom=Theme.SPACE_3),
+            color=Theme.ON_SURFACE
+        ))
+
+        with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_3)):
+            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_3)):
+                me.text("Thread Count:", style=me.Style(
+                    font_size=Theme.FONT_SIZE_BODY,
+                    color=Theme.ON_SURFACE,
+                    min_width="120px"
+                ))
+                me.input(
+                    label="",
+                    value=str(app_state.thread_count),
+                    on_blur=on_thread_count_change,
+                    style=me.Style(width="80px")
+                )
+
+        # Logging Settings
+        me.text("Logging Settings", style=me.Style(
+            font_size=Theme.FONT_SIZE_H4,
+            font_weight=Theme.FONT_WEIGHT_MEDIUM,
+            margin=me.Margin(top=Theme.SPACE_4, bottom=Theme.SPACE_3),
+            color=Theme.ON_SURFACE
+        ))
+
+        with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_3)):
+            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                me.checkbox(
+                    label="Verbose Logging",
+                    checked=int(app_state.verbose_logging),
+                    on_change=toggle_verbose_logging,
+                    style=me.Style(color=Theme.ON_SURFACE)
+                )
+
+        # Advanced Settings Toggle
+        me.text("Advanced Settings", style=me.Style(
+            font_size=Theme.FONT_SIZE_H4,
+            font_weight=Theme.FONT_WEIGHT_MEDIUM,
+            margin=me.Margin(top=Theme.SPACE_4, bottom=Theme.SPACE_3),
+            color=Theme.ON_SURFACE
+        ))
+
+        with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+            me.checkbox(
+                label="Show Advanced Settings",
+                checked=int(app_state.show_advanced_settings),
+                on_change=toggle_advanced_settings,
+                style=me.Style(color=Theme.ON_SURFACE)
+            )
+
+        # Advanced Settings Panel
+        if app_state.show_advanced_settings:
+            with me.box(style=me.Style(
+                margin=me.Margin(top=Theme.SPACE_3),
+                padding=me.Padding.all(Theme.SPACE_3),
+                background=Theme.SURFACE_VARIANT,
+                border_radius=Theme.RADIUS_MD,
+                border=me.Border.all(me.BorderSide(width=1, color=Theme.OUTLINE_VARIANT))
+            )):
+                me.text("HTTP/Connection Settings", style=me.Style(
+                    font_size=Theme.FONT_SIZE_H5,
+                    font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                    margin=me.Margin(bottom=Theme.SPACE_3),
+                    color=Theme.ON_SURFACE
+                ))
+
+                with me.box(style=me.Style(display="grid", grid_template_columns="1fr 1fr", gap=Theme.SPACE_3)):
+                    # Max Connections
+                    with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
+                        me.text("Max Connections:", style=me.Style(
+                            font_size=Theme.FONT_SIZE_CAPTION,
+                            color=Theme.ON_SURFACE_VARIANT
+                        ))
+                        me.input(
+                            label="",
+                            value=str(app_state.http_max_connections),
+                            on_blur=on_max_connections_change,
+                            style=me.Style(width="100%")
+                        )
+
+                    # Max Connections Per Host
+                    with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
+                        me.text("Max Connections Per Host:", style=me.Style(
+                            font_size=Theme.FONT_SIZE_CAPTION,
+                            color=Theme.ON_SURFACE_VARIANT
+                        ))
+                        me.input(
+                            label="",
+                            value=str(app_state.http_max_connections_per_host),
+                            on_blur=on_max_connections_per_host_change,
+                            style=me.Style(width="100%")
+                        )
+
+                    # Total Timeout
+                    with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
+                        me.text("Total Timeout (seconds):", style=me.Style(
+                            font_size=Theme.FONT_SIZE_CAPTION,
+                            color=Theme.ON_SURFACE_VARIANT
+                        ))
+                        me.input(
+                            label="",
+                            value=str(app_state.http_total_timeout),
+                            on_blur=on_total_timeout_change,
+                            style=me.Style(width="100%")
+                        )
+
+                    # Connect Timeout
+                    with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
+                        me.text("Connect Timeout (seconds):", style=me.Style(
+                            font_size=Theme.FONT_SIZE_CAPTION,
+                            color=Theme.ON_SURFACE_VARIANT
+                        ))
+                        me.input(
+                            label="",
+                            value=str(app_state.http_connect_timeout),
+                            on_blur=on_connect_timeout_change,
+                            style=me.Style(width="100%")
+                        )
 
 def logs_content():
     """Logs tab content"""
