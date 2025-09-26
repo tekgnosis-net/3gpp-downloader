@@ -201,12 +201,29 @@ class AppState:
         self.log_messages: List[str] = []
         self.available_files: List[Dict] = []
         self.selected_files: List[str] = []
+        self.current_file_type = "none"  # "none", "filtered", "all"
         self.current_page = 0
         self.show_download_confirmation = False
+        self.last_update = 0  # timestamp for triggering re-renders
 
         # UI state
         self.show_advanced_settings = False
         self.current_tab = "dashboard"  # dashboard, settings, logs
+        
+        # File selection state
+        self.search_query = ""
+        self.series_filter = "All"
+        self.release_filter = "All"
+        
+        # Notification state
+        self.completion_message = ""
+        self.show_completion_notification = False
+        
+        # Error state
+        self.error_message = ""
+        self.error_details = ""
+        self.show_error_notification = False
+        self.error_recovery_options = []
 
         # Configuration options (equivalent to main.py arguments)
         self.resume_downloads = False
@@ -276,7 +293,12 @@ def save_settings():
             
             # UI settings
             "show_advanced_settings": app_state.show_advanced_settings,
-            "current_tab": app_state.current_tab
+            "current_tab": app_state.current_tab,
+            
+            # File selection state
+            "search_query": app_state.search_query,
+            "series_filter": app_state.series_filter,
+            "release_filter": app_state.release_filter
         }
         
         with open(settings_file, 'w') as f:
@@ -314,6 +336,11 @@ def load_settings():
             app_state.show_advanced_settings = settings_data.get("show_advanced_settings", False)
             app_state.current_tab = settings_data.get("current_tab", "dashboard")
             
+            # Load file selection state
+            app_state.search_query = settings_data.get("search_query", "")
+            app_state.series_filter = str(settings_data.get("series_filter", "All"))
+            app_state.release_filter = str(settings_data.get("release_filter", "All"))
+            
             add_log_message(f"Settings loaded from {settings_file}")
         else:
             add_log_message("No settings file found, using defaults")
@@ -328,23 +355,251 @@ def add_log_message(message: str):
     if len(app_state.log_messages) > 100:
         app_state.log_messages = app_state.log_messages[-100:]
 
+def show_completion_notification(message: str):
+    """Show a completion notification"""
+    app_state.completion_message = message
+    app_state.show_completion_notification = True
+
+def dismiss_completion_notification(e: me.ClickEvent):
+    """Dismiss the completion notification"""
+    app_state.show_completion_notification = False
+    app_state.completion_message = ""
+
+def show_error_notification(message: str, details: str = "", recovery_options: List[str] = None):
+    """Show an error notification with recovery options"""
+    app_state.error_message = message
+    app_state.error_details = details
+    app_state.error_recovery_options = recovery_options or []
+    app_state.show_error_notification = True
+
+def dismiss_error_notification(e: me.ClickEvent):
+    """Dismiss the error notification"""
+    app_state.show_error_notification = False
+    app_state.error_message = ""
+    app_state.error_details = ""
+    app_state.error_recovery_options = []
+
+def retry_last_operation(e: me.ClickEvent):
+    """Retry the last failed operation"""
+    # For now, just dismiss the error - in a more sophisticated implementation,
+    # this would track the last operation and retry it
+    dismiss_error_notification(e)
+    add_log_message("Retrying last operation...")
+
 def update_scraping_progress(progress: float, message: str = ""):
     """Update scraping progress"""
     app_state.scraping_progress = progress
     if message:
         app_state.current_operation = message
         add_log_message(message)
+    
+    # Show completion notification when scraping finishes
+    if progress >= 100 and app_state.scraping_status == "running":
+        app_state.scraping_status = "completed"
+        show_completion_notification("Scraping completed successfully! Files have been discovered and saved.")
 
 def update_download_progress(progress: float, message: str = ""):
     """Update download progress"""
     app_state.download_progress = progress
+    app_state.last_update = time.time()  # Update timestamp to trigger re-render
     if message:
         app_state.current_operation = message
         add_log_message(message)
+    
+    # Show completion notification when download finishes
+    if progress >= 100 and app_state.download_status == "running":
+        app_state.download_status = "completed"
+
+def download_progress_callback(filename: str, status: str, percent: float):
+    """Callback for individual file download progress"""
+    # Track overall progress
+    if not hasattr(download_progress_callback, 'total_files'):
+        # Initialize tracking variables on first call
+        download_progress_callback.total_files = len(app_state.selected_files)
+        download_progress_callback.completed_files = 0
+    
+    if status == "completed":
+        download_progress_callback.completed_files += 1
+        # Calculate overall progress: 10% initialization + 80% download + 10% finalization
+        base_progress = 10  # Already set during initialization
+        download_progress = (download_progress_callback.completed_files / download_progress_callback.total_files) * 80
+        total_progress = base_progress + download_progress
+        update_download_progress(min(90, total_progress), f"Downloaded {download_progress_callback.completed_files}/{download_progress_callback.total_files} files")
+    elif status == "error":
+        add_log_message(f"Error downloading {filename}")
+    # For individual file progress, we could show it but for now we aggregate
+        selected_count = len(app_state.selected_files)
+        show_completion_notification(f"Download completed successfully! {selected_count} file{'s' if selected_count != 1 else ''} downloaded.")
 
 @me.page(path="/", title=os.getenv('WEB_TITLE', '3GPP Downloader'))
 def main_page():
     """Main page of the 3GPP Downloader web UI with modern design"""
+    
+    # Add CSS animations
+    me.html("""
+    <style>
+    @keyframes progress-indeterminate {
+        0% { left: -30%; }
+        100% { left: 100%; }
+    }
+    .progress-indeterminate {
+        animation: progress-indeterminate 1.5s ease-in-out infinite;
+    }
+    </style>
+    """)
+
+    # Completion notification
+    if app_state.show_completion_notification:
+        with me.box(
+            style=me.Style(
+                background="rgba(0, 0, 0, 0.6)" if app_state.show_completion_notification else "transparent",
+                display="block" if app_state.show_completion_notification else "none",
+                height="100%",
+                overflow_x="auto",
+                overflow_y="auto",
+                position="fixed",
+                width="100%",
+                z_index=1001,
+                top=0,
+                left=0,
+                backdrop_filter="blur(2px)",
+            ),
+            on_click=dismiss_completion_notification,
+        ):
+            with me.box(
+                style=me.Style(
+                    place_items="center",
+                    display="grid",
+                    height="100vh",
+                )
+            ):
+                with me.box(
+                    style=create_card_style("md", Theme.SPACE_4),
+                    on_click=lambda e: None,
+                ):
+                    # Success header
+                    with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2, margin=me.Margin(bottom=Theme.SPACE_3))):
+                        me.icon("celebration", style=me.Style(color=Theme.SUCCESS, font_size=28))
+                        me.text("Success!", style=me.Style(
+                            font_size=Theme.FONT_SIZE_H4,
+                            font_weight=Theme.FONT_WEIGHT_BOLD,
+                            color=Theme.ON_SURFACE
+                        ))
+
+                    # Message
+                    me.text(app_state.completion_message, style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY,
+                        color=Theme.ON_SURFACE_VARIANT,
+                        margin=me.Margin(bottom=Theme.SPACE_4),
+                        line_height=Theme.LINE_HEIGHT_NORMAL,
+                        text_align="center"
+                    ))
+
+                    # Dismiss button
+                    me.button(
+                        "Continue",
+                        on_click=dismiss_completion_notification,
+                        style=create_button_style("primary", "md")
+                    )
+
+    # Error notification
+    if app_state.show_error_notification:
+        with me.box(
+            style=me.Style(
+                background="rgba(0, 0, 0, 0.6)" if app_state.show_error_notification else "transparent",
+                display="block" if app_state.show_error_notification else "none",
+                height="100%",
+                overflow_x="auto",
+                overflow_y="auto",
+                position="fixed",
+                width="100%",
+                z_index=1002,
+                top=0,
+                left=0,
+                backdrop_filter="blur(2px)",
+            ),
+            on_click=dismiss_error_notification,
+        ):
+            with me.box(
+                style=me.Style(
+                    place_items="center",
+                    display="grid",
+                    height="100vh",
+                )
+            ):
+                with me.box(
+                    style=create_card_style("xl", Theme.SPACE_5),
+                    on_click=lambda e: None,
+                ):
+                    # Error header
+                    with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2, margin=me.Margin(bottom=Theme.SPACE_3))):
+                        me.icon("error", style=me.Style(color=Theme.ERROR, font_size=28))
+                        me.text("Error Occurred", style=me.Style(
+                            font_size=Theme.FONT_SIZE_H4,
+                            font_weight=Theme.FONT_WEIGHT_BOLD,
+                            color=Theme.ON_SURFACE
+                        ))
+
+                    # Error message
+                    me.text(app_state.error_message, style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY,
+                        color=Theme.ON_SURFACE_VARIANT,
+                        margin=me.Margin(bottom=Theme.SPACE_3),
+                        line_height=Theme.LINE_HEIGHT_NORMAL,
+                        text_align="center"
+                    ))
+
+                    # Error details (if available)
+                    if app_state.error_details:
+                        with me.box(style=me.Style(
+                            background=Theme.ERROR + "10",
+                            border=me.Border.all(me.BorderSide(width=1, color=Theme.ERROR + "40")),
+                            border_radius=Theme.RADIUS_MD,
+                            padding=me.Padding.all(Theme.SPACE_3),
+                            margin=me.Margin(bottom=Theme.SPACE_4)
+                        )):
+                            me.text("Technical Details:", style=me.Style(
+                                font_size=Theme.FONT_SIZE_CAPTION,
+                                font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                                color=Theme.ERROR,
+                                margin=me.Margin(bottom=Theme.SPACE_1)
+                            ))
+                            me.text(app_state.error_details, style=me.Style(
+                                font_size=Theme.FONT_SIZE_CAPTION,
+                                color=Theme.ON_SURFACE_VARIANT,
+                                font_family="monospace",
+                                word_wrap="break-word"
+                            ))
+
+                    # Recovery options
+                    if app_state.error_recovery_options:
+                        me.text("Suggested Actions:", style=me.Style(
+                            font_size=Theme.FONT_SIZE_BODY,
+                            font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                            color=Theme.ON_SURFACE,
+                            margin=me.Margin(bottom=Theme.SPACE_2)
+                        ))
+                        for option in app_state.error_recovery_options:
+                            with me.box(style=me.Style(margin=me.Margin(bottom=Theme.SPACE_2))):
+                                me.text(f"• {option}", style=me.Style(
+                                    font_size=Theme.FONT_SIZE_BODY,
+                                    color=Theme.ON_SURFACE_VARIANT,
+                                    line_height=Theme.LINE_HEIGHT_NORMAL
+                                ))
+
+                    # Action buttons
+                    with me.box(style=me.Style(display="flex", gap=Theme.SPACE_3, justify_content="center")):
+                        if app_state.error_recovery_options:
+                            me.button(
+                                "Try Again",
+                                on_click=retry_last_operation,
+                                style=create_button_style("primary", "md")
+                            )
+                        me.button(
+                            "Dismiss",
+                            on_click=dismiss_error_notification,
+                            style=create_button_style("outline", "md")
+                        )
 
     # Download confirmation dialog
     with me.box(
@@ -372,7 +627,7 @@ def main_page():
         ):
             with me.box(
                 style=create_card_style("xl", Theme.SPACE_5),
-                on_click=lambda e: e.stop_propagation(),
+                on_click=lambda e: None,
             ):
                 # Dialog header
                 with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2, margin=me.Margin(bottom=Theme.SPACE_4))):
@@ -593,8 +848,120 @@ def on_connect_timeout_change(e: me.InputBlurEvent):
     except ValueError:
         pass
 
+def welcome_screen():
+    """Welcome screen for first-time users or when no files are available"""
+    with me.box(style=me.Style(
+        display="flex",
+        flex_direction="column",
+        align_items="center",
+        justify_content="center",
+        min_height="60vh",
+        text_align="center",
+        padding=me.Padding.all(Theme.SPACE_4)
+    )):
+        # Welcome header
+        me.icon("description", style=me.Style(
+            font_size=64,
+            color=Theme.PRIMARY,
+            margin=me.Margin(bottom=Theme.SPACE_3)
+        ))
+        
+        me.text("Welcome to 3GPP Downloader", style=me.Style(
+            font_size=Theme.FONT_SIZE_H2,
+            font_weight=Theme.FONT_WEIGHT_BOLD,
+            color=Theme.ON_SURFACE,
+            margin=me.Margin(bottom=Theme.SPACE_2)
+        ))
+        
+        me.text("Download 3GPP technical specifications with ease", style=me.Style(
+            font_size=Theme.FONT_SIZE_H5,
+            color=Theme.ON_SURFACE_VARIANT,
+            margin=me.Margin(bottom=Theme.SPACE_5)
+        ))
+        
+        # Quick start guide
+        with me.box(style=me.Style(
+            background=Theme.SURFACE_VARIANT,
+            padding=me.Padding.all(Theme.SPACE_4),
+            border_radius=Theme.RADIUS_MD,
+            margin=me.Margin(bottom=Theme.SPACE_4),
+            max_width="600px"
+        )):
+            me.text("Get Started in 3 Simple Steps:", style=me.Style(
+                font_size=Theme.FONT_SIZE_H5,
+                font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                color=Theme.ON_SURFACE,
+                margin=me.Margin(bottom=Theme.SPACE_3)
+            ))
+            
+            # Step 1
+            with me.box(style=me.Style(display="flex", align_items="flex-start", gap=Theme.SPACE_3, margin=me.Margin(bottom=Theme.SPACE_3))):
+                with me.box(style=me.Style(
+                    width=32, height=32, background=Theme.PRIMARY, border_radius="50%",
+                    display="flex", align_items="center", justify_content="center", color="white",
+                    font_weight=Theme.FONT_WEIGHT_BOLD, font_size=Theme.FONT_SIZE_H6, flex_shrink=0
+                )):
+                    me.text("1", style=me.Style(color="white"))
+                with me.box(style=me.Style(text_align="left")):
+                    me.text("Discover Specifications", style=me.Style(
+                        font_size=Theme.FONT_SIZE_H6, font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                        color=Theme.ON_SURFACE, margin=me.Margin(bottom=Theme.SPACE_1)
+                    ))
+                    me.text("Click 'Start Scraping' to scan the 3GPP website and find all available technical specifications.", style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY, color=Theme.ON_SURFACE_VARIANT, line_height=1.5
+                    ))
+            
+            # Step 2
+            with me.box(style=me.Style(display="flex", align_items="flex-start", gap=Theme.SPACE_3, margin=me.Margin(bottom=Theme.SPACE_3))):
+                with me.box(style=me.Style(
+                    width=32, height=32, background=Theme.SECONDARY, border_radius="50%",
+                    display="flex", align_items="center", justify_content="center", color="white",
+                    font_weight=Theme.FONT_WEIGHT_BOLD, font_size=Theme.FONT_SIZE_H6, flex_shrink=0
+                )):
+                    me.text("2", style=me.Style(color="white"))
+                with me.box(style=me.Style(text_align="left")):
+                    me.text("Choose What to Download", style=me.Style(
+                        font_size=Theme.FONT_SIZE_H6, font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                        color=Theme.ON_SURFACE, margin=me.Margin(bottom=Theme.SPACE_1)
+                    ))
+                    me.text("Use filters to select specific series, releases, or get the latest versions only.", style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY, color=Theme.ON_SURFACE_VARIANT, line_height=1.5
+                    ))
+            
+            # Step 3
+            with me.box(style=me.Style(display="flex", align_items="flex-start", gap=Theme.SPACE_3)):
+                with me.box(style=me.Style(
+                    width=32, height=32, background=Theme.ACCENT, border_radius="50%",
+                    display="flex", align_items="center", justify_content="center", color="white",
+                    font_weight=Theme.FONT_WEIGHT_BOLD, font_size=Theme.FONT_SIZE_H6, flex_shrink=0
+                )):
+                    me.text("3", style=me.Style(color="white"))
+                with me.box(style=me.Style(text_align="left")):
+                    me.text("Download Files", style=me.Style(
+                        font_size=Theme.FONT_SIZE_H6, font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                        color=Theme.ON_SURFACE, margin=me.Margin(bottom=Theme.SPACE_1)
+                    ))
+                    me.text("Download selected specifications to your local machine with progress tracking.", style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY, color=Theme.ON_SURFACE_VARIANT, line_height=1.5
+                    ))
+        
+        # Action button
+        me.button(
+            "🚀 Start Scraping",
+            on_click=start_scraping,
+            disabled=int(app_state.scraping_status == "running" or app_state.download_status == "running"),
+            style=create_button_style("primary", "lg") if not (app_state.scraping_status == "running" or app_state.download_status == "running") else create_button_style("primary", "lg").update(
+                opacity=0.6, cursor="not-allowed"
+            )
+        )
+
 def dashboard_content():
     """Dashboard tab content with modern design"""
+    
+    # Show welcome screen if no files are available
+    if not app_state.available_files:
+        return welcome_screen()
+    
     # Status overview cards
     with me.box(
         style=me.Style(
@@ -610,23 +977,297 @@ def dashboard_content():
 
         # Download status card
         with me.box(style=create_card_style("md")):
-            status_card("Download", app_state.download_status, app_state.download_progress, "download")
+            status_card("Download", app_state.download_status, app_state.download_progress, "download", app_state.last_update)
 
         # Files overview card
         with me.box(style=create_card_style("md")):
             files_overview_card()
+
+    # Help section
+    with me.box(style=create_card_style("md", Theme.SPACE_4)):
+        me.text("How to Use", style=me.Style(
+            font_size=Theme.FONT_SIZE_H4,
+            font_weight=Theme.FONT_WEIGHT_BOLD,
+            margin=me.Margin(bottom=Theme.SPACE_3),
+            color=Theme.ON_SURFACE
+        ))
+
+        with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_3)):
+            # Step 1
+            with me.box(style=me.Style(display="flex", align_items="flex-start", gap=Theme.SPACE_3)):
+                with me.box(style=me.Style(
+                    width=32, height=32, background=Theme.PRIMARY, border_radius="50%",
+                    display="flex", align_items="center", justify_content="center", color="white",
+                    font_weight=Theme.FONT_WEIGHT_BOLD, font_size=Theme.FONT_SIZE_H6
+                )):
+                    me.text("1", style=me.Style(color="white"))
+                with me.box(style=me.Style(flex_grow=1)):
+                    me.text("Start Scraping (Optional)", style=me.Style(
+                        font_size=Theme.FONT_SIZE_H6, font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                        color=Theme.ON_SURFACE, margin=me.Margin(bottom=Theme.SPACE_1)
+                    ))
+                    me.text("Collect specification data from 3GPP website. Skip this step if you already have links.json or latest.json files from a previous run.", style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY, color=Theme.ON_SURFACE_VARIANT, line_height=1.4
+                    ))
+
+            # Step 2
+            with me.box(style=me.Style(display="flex", align_items="flex-start", gap=Theme.SPACE_3)):
+                with me.box(style=me.Style(
+                    width=32, height=32, background=Theme.SECONDARY, border_radius="50%",
+                    display="flex", align_items="center", justify_content="center", color="white",
+                    font_weight=Theme.FONT_WEIGHT_BOLD, font_size=Theme.FONT_SIZE_H6
+                )):
+                    me.text("2", style=me.Style(color="white"))
+                with me.box(style=me.Style(flex_grow=1)):
+                    me.text("Filter Versions (Optional)", style=me.Style(
+                        font_size=Theme.FONT_SIZE_H6, font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                        color=Theme.ON_SURFACE, margin=me.Margin(bottom=Theme.SPACE_1)
+                    ))
+                    me.text("Reduce download size by keeping only the latest version of each specification. Requires links.json from scraping.", style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY, color=Theme.ON_SURFACE_VARIANT, line_height=1.4
+                    ))
+
+            # Step 3
+            with me.box(style=me.Style(display="flex", align_items="flex-start", gap=Theme.SPACE_3)):
+                with me.box(style=me.Style(
+                    width=32, height=32, background=Theme.ACCENT, border_radius="50%",
+                    display="flex", align_items="center", justify_content="center", color="white",
+                    font_weight=Theme.FONT_WEIGHT_BOLD, font_size=Theme.FONT_SIZE_H6
+                )):
+                    me.text("3", style=me.Style(color="white"))
+                with me.box(style=me.Style(flex_grow=1)):
+                    me.text("Select & Download", style=me.Style(
+                        font_size=Theme.FONT_SIZE_H6, font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                        color=Theme.ON_SURFACE, margin=me.Margin(bottom=Theme.SPACE_1)
+                    ))
+                    me.text("Choose specifications from the list below, then download. Works with any available JSON file (latest.json preferred).", style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY, color=Theme.ON_SURFACE_VARIANT, line_height=1.4
+                    ))
 
     # Quick actions
     with me.box(style=create_card_style("md", Theme.SPACE_4)):
         me.text("Quick Actions", style=me.Style(
             font_size=Theme.FONT_SIZE_H4,
             font_weight=Theme.FONT_WEIGHT_BOLD,
-            margin=me.Margin(bottom=Theme.SPACE_4),
+            margin=me.Margin(bottom=Theme.SPACE_3),
             color=Theme.ON_SURFACE
         ))
 
+        # Help text for color coding
+        with me.box(style=me.Style(
+            background=Theme.SURFACE_VARIANT,
+            padding=me.Padding.all(Theme.SPACE_3),
+            border_radius=Theme.RADIUS_MD,
+            margin=me.Margin(bottom=Theme.SPACE_4),
+            border=me.Border.all(me.BorderSide(width=1, color=Theme.OUTLINE_VARIANT))
+        )):
+            me.text("Workflow Status:", style=me.Style(
+                font_size=Theme.FONT_SIZE_H6,
+                font_weight=Theme.FONT_WEIGHT_BOLD,
+                color=Theme.ON_SURFACE,
+                margin=me.Margin(bottom=Theme.SPACE_2)
+            ))
+            
+            # Show current file status
+            files_status = []
+            if Path('downloads/latest.json').exists():
+                files_status.append("✅ Filtered versions available (latest.json)")
+            if Path('downloads/links.json').exists():
+                files_status.append("✅ All versions available (links.json)")
+            
+            if files_status:
+                me.text("Files ready for download:", style=me.Style(
+                    font_size=Theme.FONT_SIZE_CAPTION,
+                    color=Theme.SUCCESS,
+                    margin=me.Margin(bottom=Theme.SPACE_1)
+                ))
+                for status in files_status:
+                    me.text(f"• {status}", style=me.Style(
+                        font_size=Theme.FONT_SIZE_CAPTION,
+                        color=Theme.ON_SURFACE_VARIANT
+                    ))
+                
+                # Show which files are currently displayed
+                current_display = {
+                    "none": "No files loaded",
+                    "filtered": "Filtered versions (latest.json)",
+                    "all": "All versions (links.json)"
+                }.get(app_state.current_file_type, "Unknown")
+                
+                me.text("", style=me.Style(margin=me.Margin(bottom=Theme.SPACE_1)))
+                me.text(f"📋 Currently displaying: {current_display}", style=me.Style(
+                    font_size=Theme.FONT_SIZE_CAPTION,
+                    color=Theme.PRIMARY,
+                    font_weight=Theme.FONT_WEIGHT_MEDIUM
+                ))
+            else:
+                me.text("No files available - start scraping first", style=me.Style(
+                    font_size=Theme.FONT_SIZE_CAPTION,
+                    color=Theme.WARNING
+                ))
+            
+            me.text("", style=me.Style(margin=me.Margin(bottom=Theme.SPACE_2)))
+            
+            me.text("Color Guide:", style=me.Style(
+                font_size=Theme.FONT_SIZE_H6,
+                font_weight=Theme.FONT_WEIGHT_BOLD,
+                color=Theme.ON_SURFACE,
+                margin=me.Margin(bottom=Theme.SPACE_2)
+            ))
+            with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
+                with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                    me.box(style=me.Style(width=16, height=16, background=Theme.PRIMARY, border_radius=Theme.RADIUS_SM))
+                    me.text("Blue: Data Collection (Start Scraping)", style=me.Style(font_size=Theme.FONT_SIZE_CAPTION, color=Theme.ON_SURFACE_VARIANT))
+                with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                    me.box(style=me.Style(width=16, height=16, background=Theme.SECONDARY, border_radius=Theme.RADIUS_SM))
+                    me.text("Red: Data Processing (Filter Versions)", style=me.Style(font_size=Theme.FONT_SIZE_CAPTION, color=Theme.ON_SURFACE_VARIANT))
+                with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                    me.box(style=me.Style(width=16, height=16, background=Theme.ACCENT, border_radius=Theme.RADIUS_SM))
+                    me.text("Orange: File Operations (Start Download)", style=me.Style(font_size=Theme.FONT_SIZE_CAPTION, color=Theme.ON_SURFACE_VARIANT))
+
         with me.box(style=me.Style(display="flex", gap=Theme.SPACE_3, flex_wrap="wrap")):
+            # Workflow status indicator
+            workflow_status()
+            
             action_buttons()
+
+    # File selection section
+    if app_state.available_files:
+        with me.box(style=create_card_style("md", Theme.SPACE_4)):
+            me.text("Select Files to Download", style=me.Style(
+                font_size=Theme.FONT_SIZE_H4,
+                font_weight=Theme.FONT_WEIGHT_BOLD,
+                margin=me.Margin(bottom=Theme.SPACE_3),
+                color=Theme.ON_SURFACE
+            ))
+
+    # File selection section
+    if app_state.available_files:
+        with me.box(style=create_card_style("md", Theme.SPACE_4)):
+            me.text("Select Files to Download", style=me.Style(
+                font_size=Theme.FONT_SIZE_H4,
+                font_weight=Theme.FONT_WEIGHT_BOLD,
+                margin=me.Margin(bottom=Theme.SPACE_3),
+                color=Theme.ON_SURFACE
+            ))
+
+            # Smart selection controls
+            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_3, margin=me.Margin(bottom=Theme.SPACE_3), flex_wrap="wrap")):
+                # Search box
+                with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                    me.icon("search", style=me.Style(color=Theme.ON_SURFACE_VARIANT, font_size=20))
+                    me.input(
+                        label="Search files...",
+                        value=app_state.search_query,
+                        on_blur=on_search_change,
+                        style=me.Style(width="200px")
+                    )
+                
+                # Quick filters
+                me.button(
+                    "Select All",
+                    on_click=select_all_files,
+                    style=create_button_style("outline", "sm")
+                )
+                me.button(
+                    "Select None", 
+                    on_click=deselect_all_files,
+                    style=create_button_style("outline", "sm")
+                )
+                
+                # Series/Release filters
+                with me.box(style=me.Style(display="flex", gap=Theme.SPACE_2)):
+                    me.text("Filter:", style=me.Style(font_size=Theme.FONT_SIZE_CAPTION, color=Theme.ON_SURFACE_VARIANT))
+                    me.select(
+                        label="Series",
+                        options=[{"label": opt, "value": opt} for opt in ["All"] + sorted(list(set(f.get('series', '') for f in app_state.available_files if f.get('series'))))],
+                        value=app_state.series_filter,
+                        on_selection_change=on_series_filter_change,
+                        style=me.Style(width="120px")
+                    )
+                    me.select(
+                        label="Release", 
+                        options=[{"label": str(opt), "value": str(opt)} for opt in ["All"] + sorted(list(set(f.get('release', '') for f in app_state.available_files if f.get('release'))))],
+                        value=app_state.release_filter,
+                        on_selection_change=on_release_filter_change,
+                        style=me.Style(width="120px")
+                    )
+
+            # Filtered results summary
+            filtered_files = get_filtered_files()
+            me.text(f"Showing {len(filtered_files)} of {len(app_state.available_files)} files", style=me.Style(
+                font_size=Theme.FONT_SIZE_BODY,
+                color=Theme.ON_SURFACE_VARIANT,
+                margin=me.Margin(bottom=Theme.SPACE_2)
+            ))
+
+            # File list with smart display
+            with me.box(style=me.Style(
+                max_height="400px",
+                overflow_y="auto",
+                border=me.Border.all(me.BorderSide(width=1, color=Theme.OUTLINE_VARIANT)),
+                border_radius=Theme.RADIUS_MD
+            )):
+                if not filtered_files:
+                    with me.box(style=me.Style(
+                        padding=me.Padding.all(Theme.SPACE_4),
+                        text_align="center",
+                        color=Theme.ON_SURFACE_VARIANT
+                    )):
+                        me.icon("search_off", style=me.Style(font_size=48, margin=me.Margin(bottom=Theme.SPACE_2)))
+                        me.text("No files match your search criteria", style=me.Style(font_size=Theme.FONT_SIZE_H6))
+                else:
+                    for i, file_info in enumerate(filtered_files[:50]):  # Limit display to first 50 for performance
+                        file_url = file_info.get('url', '')
+                        file_name = file_info.get('name', file_url.split('/')[-1] if file_url else f'File {i+1}')
+                        series = file_info.get('series', 'Unknown')
+                        release = file_info.get('release', 'Unknown')
+                        is_selected = file_url in app_state.selected_files
+                        
+                        with me.box(style=me.Style(
+                            padding=me.Padding.all(Theme.SPACE_2),
+                            border=me.Border(bottom=me.BorderSide(width=1, color=Theme.OUTLINE_VARIANT)) if i < len(filtered_files) - 1 and i < 49 else None,
+                            background=Theme.SURFACE_VARIANT if i % 2 == 0 else Theme.SURFACE,
+                            display="flex",
+                            align_items="center",
+                            gap=Theme.SPACE_2
+                        )):
+                            me.checkbox(
+                                label="",
+                                checked=int(is_selected),
+                                on_change=on_file_selection_change,
+                                key=f"file_{file_url}"
+                            )
+                            with me.box(style=me.Style(flex_grow=1, min_width=0)):
+                                me.text(file_name, style=me.Style(
+                                    font_size=Theme.FONT_SIZE_BODY,
+                                    color=Theme.ON_SURFACE,
+                                    font_weight=Theme.FONT_WEIGHT_MEDIUM if is_selected else Theme.FONT_WEIGHT_REGULAR,
+                                    word_wrap="break-word"
+                                ))
+                                with me.box(style=me.Style(display="flex", gap=Theme.SPACE_3, margin=me.Margin(top=Theme.SPACE_1))):
+                                    me.text(f"Series {series}", style=me.Style(
+                                        font_size=Theme.FONT_SIZE_CAPTION,
+                                        color=Theme.PRIMARY,
+                                        background=Theme.PRIMARY_LIGHT,
+                                        padding=me.Padding.symmetric(horizontal=Theme.SPACE_2, vertical=2),
+                                        border_radius=Theme.RADIUS_SM
+                                    ))
+                                    me.text(f"Rel-{release}", style=me.Style(
+                                        font_size=Theme.FONT_SIZE_CAPTION,
+                                        color=Theme.SECONDARY,
+                                        background=Theme.SECONDARY_LIGHT,
+                                        padding=me.Padding.symmetric(horizontal=Theme.SPACE_2, vertical=2),
+                                        border_radius=Theme.RADIUS_SM
+                                    ))
+                    
+                    if len(filtered_files) > 50:
+                        me.text(f"... and {len(filtered_files) - 50} more files", style=me.Style(
+                            font_size=Theme.FONT_SIZE_CAPTION,
+                            color=Theme.ON_SURFACE_VARIANT,
+                            text_align="center",
+                            padding=me.Padding.all(Theme.SPACE_2)
+                        ))
 
     # Current operation
     if app_state.current_operation:
@@ -639,7 +1280,7 @@ def dashboard_content():
                     font_style="italic"
                 ))
 
-def status_card(title: str, status: str, progress: float, icon: str):
+def status_card(title: str, status: str, progress: float, icon: str, update_timestamp: float = 0):
     """Modern status card component"""
     with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_3)):
         me.icon(icon, style=me.Style(
@@ -660,20 +1301,94 @@ def status_card(title: str, status: str, progress: float, icon: str):
                 me.icon(get_status_icon(status), style=me.Style(font_size=14))
                 me.text(get_status_label(status), style=me.Style(font_size=Theme.FONT_SIZE_CAPTION))
 
-            # Progress bar for running operations
-            if status == "running" and progress > 0:
+            # Enhanced progress display
+            if status == "running":
                 with me.box(style=me.Style(width="100%", margin=me.Margin(top=Theme.SPACE_2))):
-                    with me.box(style=me.Style(height=6, border_radius=Theme.RADIUS_SM)):
-                        me.progress_bar(
-                            value=progress,
-                            mode="determinate",
-                            color="primary"
-                        )
-                    me.text(f"{progress:.1f}%", style=me.Style(
-                        font_size=Theme.FONT_SIZE_CAPTION,
-                        color=Theme.ON_SURFACE_VARIANT,
-                        text_align="right",
+                    # Show actual progress if available, otherwise indeterminate
+                    if progress > 0:
+                        # Determinate progress bar
+                        with me.box(style=me.Style(
+                            height=8,
+                            background=Theme.SURFACE_VARIANT,
+                            border_radius=Theme.RADIUS_MD,
+                            overflow="hidden"
+                        )):
+                            me.box(style=me.Style(
+                                height="100%",
+                                width=f"{progress}%",
+                                background=get_status_color(status),
+                                border_radius=Theme.RADIUS_MD
+                            ))
+                    else:
+                        # Indeterminate progress bar for running downloads
+                        with me.box(style=me.Style(
+                            height=8,
+                            background=Theme.SURFACE_VARIANT,
+                            border_radius=Theme.RADIUS_MD,
+                            overflow="hidden",
+                            position="relative"
+                        )):
+                            # Animated indeterminate progress
+                            me.box(style=me.Style(
+                                height="100%",
+                                width="30%",
+                                background=get_status_color(status),
+                                position="absolute",
+                                left="-30%"
+                            ), classes="progress-indeterminate")
+                    
+                    # Progress details
+                    with me.box(style=me.Style(
+                        display="flex",
+                        justify_content="space-between",
+                        align_items="center",
                         margin=me.Margin(top=Theme.SPACE_1)
+                    )):
+                        me.text("Download in progress...", style=me.Style(
+                            font_size=Theme.FONT_SIZE_CAPTION,
+                            color=Theme.ON_SURFACE_VARIANT
+                        ))
+                        if app_state.current_operation:
+                            me.text(app_state.current_operation, style=me.Style(
+                                font_size=Theme.FONT_SIZE_CAPTION,
+                                color=Theme.ON_SURFACE_VARIANT,
+                                font_style="italic"
+                            ))
+            elif status == "completed":
+                # Completion confirmation
+                with me.box(style=me.Style(
+                    display="flex",
+                    align_items="center",
+                    gap=Theme.SPACE_2,
+                    margin=me.Margin(top=Theme.SPACE_2),
+                    padding=me.Padding.all(Theme.SPACE_2),
+                    background=Theme.SUCCESS + "10",
+                    border_radius=Theme.RADIUS_MD,
+                    border=me.Border.all(me.BorderSide(width=1, color=Theme.SUCCESS + "40"))
+                )):
+                    me.icon("check_circle", style=me.Style(color=Theme.SUCCESS, font_size=16))
+                    me.text("Operation completed successfully", style=me.Style(
+                        font_size=Theme.FONT_SIZE_CAPTION,
+                        color=Theme.SUCCESS,
+                        font_weight=Theme.FONT_WEIGHT_MEDIUM
+                    ))
+            elif status == "error":
+                # Error display
+                with me.box(style=me.Style(
+                    display="flex",
+                    align_items="center",
+                    gap=Theme.SPACE_2,
+                    margin=me.Margin(top=Theme.SPACE_2),
+                    padding=me.Padding.all(Theme.SPACE_2),
+                    background=Theme.ERROR + "10",
+                    border_radius=Theme.RADIUS_MD,
+                    border=me.Border.all(me.BorderSide(width=1, color=Theme.ERROR + "40"))
+                )):
+                    me.icon("error", style=me.Style(color=Theme.ERROR, font_size=16))
+                    me.text("Operation failed - check logs for details", style=me.Style(
+                        font_size=Theme.FONT_SIZE_CAPTION,
+                        color=Theme.ERROR,
+                        font_weight=Theme.FONT_WEIGHT_MEDIUM
                     ))
 
 def files_overview_card():
@@ -706,24 +1421,151 @@ def files_overview_card():
                     font_weight=Theme.FONT_WEIGHT_MEDIUM
                 ))
 
-def action_buttons():
-    """Quick action buttons"""
-    actions = [
-        ("Start Scraping", "web", "primary", start_scraping, app_state.scraping_status == "running" or app_state.download_status == "running"),
-        ("Filter Versions", "filter_list", "secondary", filter_versions, app_state.scraping_status == "running" or app_state.download_status == "running"),
-        ("Start Download", "download", "accent", start_download, app_state.scraping_status == "running" or app_state.download_status == "running" or not app_state.available_files),
-    ]
+def workflow_status():
+    """Display current workflow status and next steps"""
+    has_files = len(app_state.available_files) > 0
+    has_selections = len(app_state.selected_files) > 0
+    is_busy = app_state.scraping_status == "running" or app_state.download_status == "running"
+    
+    # Determine current step
+    if is_busy:
+        current_step = "Working..."
+        next_step = "Please wait for current operation to complete"
+        status_color = Theme.INFO
+        status_icon = "sync"
+    elif not has_files:
+        current_step = "No files loaded"
+        next_step = "Load existing files or start scraping"
+        status_color = Theme.WARNING
+        status_icon = "folder_open"
+    elif app_state.current_file_type == "all" and not has_selections:
+        current_step = "Files loaded (all versions)"
+        next_step = "Filter to latest versions or select specific files"
+        status_color = Theme.PRIMARY
+        status_icon = "list"
+    elif has_selections:
+        current_step = f"{len(app_state.selected_files)} file{'s' if len(app_state.selected_files) != 1 else ''} selected"
+        next_step = "Ready to download"
+        status_color = Theme.SUCCESS
+        status_icon = "check_circle"
+    else:
+        current_step = "Files available"
+        next_step = "Select files to download"
+        status_color = Theme.SECONDARY
+        status_icon = "checklist"
+    
+    with me.box(style=me.Style(
+        display="flex",
+        align_items="center",
+        gap=Theme.SPACE_2,
+        padding=me.Padding.all(Theme.SPACE_3),
+        background=Theme.SURFACE_VARIANT,
+        border_radius=Theme.RADIUS_MD,
+        border=me.Border.all(me.BorderSide(width=1, color=status_color + "40")),
+        min_width="250px"
+    )):
+        me.icon(status_icon, style=me.Style(color=status_color, font_size=20))
+        with me.box(style=me.Style(flex_grow=1)):
+            me.text(current_step, style=me.Style(
+                font_size=Theme.FONT_SIZE_BODY,
+                font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                color=Theme.ON_SURFACE
+            ))
+            me.text(next_step, style=me.Style(
+                font_size=Theme.FONT_SIZE_CAPTION,
+                color=Theme.ON_SURFACE_VARIANT
+            ))
 
-    for label, icon, variant, callback, disabled in actions:
-        base_style = create_button_style(variant, "md")
-        base_style.opacity = 0.6 if disabled else 1
-        base_style.cursor = "not-allowed" if disabled else "pointer"
-        me.button(
-            label,
-            on_click=callback,
-            disabled=int(disabled),
-            style=base_style
-        )
+def action_buttons():
+    """Smart action buttons with workflow guidance"""
+    # Determine current workflow state
+    has_files = len(app_state.available_files) > 0
+    has_filtered_files = len(get_filtered_files()) > 0
+    has_selections = len(app_state.selected_files) > 0
+    is_busy = app_state.scraping_status == "running" or app_state.download_status == "running"
+    
+    # Define actions based on current state
+    actions = []
+    
+    if not has_files:
+        # No files loaded - guide user to get files first
+        actions = [
+            ("Load Files", "folder_open", "primary", load_available_files, is_busy,
+             "Load existing file lists (latest.json or links.json)"),
+            ("Start Scraping", "web", "secondary", start_scraping, is_busy,
+             "Scrape 3GPP website to discover available specifications"),
+        ]
+    elif app_state.current_file_type == "all" and not has_selections:
+        # Has all files but nothing selected - guide to filtering
+        actions = [
+            ("Filter Latest", "filter_list", "primary", filter_versions, is_busy,
+             "Show only latest versions (recommended for most users)"),
+            ("Select Files", "checklist", "secondary", None, False,
+             "Use search and filters above to select specific files"),
+        ]
+    elif has_filtered_files and not has_selections:
+        # Has filtered files but nothing selected - guide to selection
+        actions = [
+            ("Select All", "check_box", "primary", select_all_files, is_busy,
+             f"Select all {len(get_filtered_files())} displayed files"),
+            ("Start Download", "download", "accent", start_download, is_busy or not has_selections,
+             "Download selected files (select files first)"),
+        ]
+    elif has_selections:
+        # Has selections - ready to download
+        actions = [
+            ("Start Download", "download", "primary", start_download, is_busy,
+             f"Download {len(app_state.selected_files)} selected file{'s' if len(app_state.selected_files) != 1 else ''}"),
+            ("Clear Selection", "clear_all", "outline", deselect_all_files, is_busy,
+             "Deselect all files to start over"),
+        ]
+    else:
+        # Fallback - general actions
+        actions = [
+            ("Load Files", "folder_open", "primary", load_available_files, is_busy,
+             "Load existing file lists"),
+            ("Start Scraping", "web", "secondary", start_scraping, is_busy,
+             "Scrape for new specifications"),
+        ]
+
+    for label, icon, variant, callback, disabled, description in actions:
+        with me.box(style=me.Style(display="flex", flex_direction="column", align_items="center", gap=Theme.SPACE_2, min_width="140px")):
+            base_style = create_button_style(variant, "md")
+            base_style.opacity = 0.6 if disabled else 1
+            base_style.cursor = "not-allowed" if disabled else "pointer"
+            
+            # Special handling for buttons without callbacks (informational)
+            if callback:
+                me.button(
+                    label,
+                    on_click=callback,
+                    disabled=int(disabled),
+                    style=base_style
+                )
+            else:
+                # Render as styled box for informational buttons
+                with me.box(style=me.Style(
+                    **base_style,
+                    display="flex",
+                    align_items="center",
+                    justify_content="center",
+                    padding=me.Padding.symmetric(horizontal=Theme.SPACE_3, vertical=Theme.SPACE_2),
+                    border_radius=Theme.RADIUS_MD,
+                    cursor="default"
+                )):
+                    me.text(label, style=me.Style(
+                        font_size=Theme.FONT_SIZE_BUTTON,
+                        font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                        color=Theme.ON_PRIMARY if variant == "primary" else Theme.ON_SURFACE
+                    ))
+            
+            me.text(description, style=me.Style(
+                font_size=Theme.FONT_SIZE_CAPTION,
+                color=Theme.ON_SURFACE_VARIANT,
+                text_align="center",
+                line_height=1.3,
+                max_width="140px"
+            ))
 
 def get_status_color(status: str) -> str:
     """Get color for status"""
@@ -756,7 +1598,7 @@ def get_status_icon(status: str) -> str:
     return status_icons.get(status, "help")
 
 def settings_content():
-    """Settings tab content with configuration options"""
+    """Settings tab content with organized configuration options"""
     with me.box(style=create_card_style("md")):
         me.text("Settings", style=me.Style(
             font_size=Theme.FONT_SIZE_H3,
@@ -765,96 +1607,99 @@ def settings_content():
             color=Theme.ON_SURFACE
         ))
 
-        # Download Options
-        me.text("Download Options", style=me.Style(
-            font_size=Theme.FONT_SIZE_H4,
-            font_weight=Theme.FONT_WEIGHT_MEDIUM,
-            margin=me.Margin(bottom=Theme.SPACE_3),
-            color=Theme.ON_SURFACE
-        ))
-
-        with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_3)):
-            # Resume Downloads
-            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
-                me.checkbox(
-                    label="Resume Downloads",
-                    checked=int(app_state.resume_downloads),
-                    on_change=toggle_resume_downloads,
-                    style=me.Style(color=Theme.ON_SURFACE)
-                )
-
-            # Download All Versions
-            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
-                me.checkbox(
-                    label="Download All Versions",
-                    checked=int(app_state.download_all_versions),
-                    on_change=toggle_download_all_versions,
-                    style=me.Style(color=Theme.ON_SURFACE)
-                )
-
-            # Organize by Series
-            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
-                me.checkbox(
-                    label="Organize by Series",
-                    checked=int(app_state.organize_by_series),
-                    on_change=toggle_organize_by_series,
-                    style=me.Style(color=Theme.ON_SURFACE)
-                )
-
-        # Thread Count
-        me.text("Performance Settings", style=me.Style(
-            font_size=Theme.FONT_SIZE_H4,
-            font_weight=Theme.FONT_WEIGHT_MEDIUM,
-            margin=me.Margin(top=Theme.SPACE_4, bottom=Theme.SPACE_3),
-            color=Theme.ON_SURFACE
-        ))
-
-        with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_3)):
-            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_3)):
-                me.text("Thread Count:", style=me.Style(
-                    font_size=Theme.FONT_SIZE_BODY,
-                    color=Theme.ON_SURFACE,
-                    min_width="120px"
+        # Basic Settings Section
+        with me.box(style=create_card_style("sm", Theme.SPACE_3)):
+            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2, margin=me.Margin(bottom=Theme.SPACE_3))):
+                me.icon("settings", style=me.Style(color=Theme.PRIMARY, font_size=20))
+                me.text("Basic Settings", style=me.Style(
+                    font_size=Theme.FONT_SIZE_H5,
+                    font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                    color=Theme.ON_SURFACE
                 ))
-                me.input(
-                    label="",
-                    value=str(app_state.thread_count),
-                    on_blur=on_thread_count_change,
-                    style=me.Style(width="80px")
-                )
 
-        # Logging Settings
-        me.text("Logging Settings", style=me.Style(
-            font_size=Theme.FONT_SIZE_H4,
-            font_weight=Theme.FONT_WEIGHT_MEDIUM,
-            margin=me.Margin(top=Theme.SPACE_4, bottom=Theme.SPACE_3),
-            color=Theme.ON_SURFACE
-        ))
+            me.text("Configure the most common download options and preferences.", style=me.Style(
+                font_size=Theme.FONT_SIZE_BODY,
+                color=Theme.ON_SURFACE_VARIANT,
+                margin=me.Margin(bottom=Theme.SPACE_3)
+            ))
 
-        with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_3)):
-            with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
-                me.checkbox(
-                    label="Verbose Logging",
-                    checked=int(app_state.verbose_logging),
-                    on_change=toggle_verbose_logging,
-                    style=me.Style(color=Theme.ON_SURFACE)
-                )
+            with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_3)):
+                # Download behavior
+                with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                    me.checkbox(
+                        label="Resume interrupted downloads",
+                        checked=int(app_state.resume_downloads),
+                        on_change=toggle_resume_downloads,
+                        style=me.Style(color=Theme.ON_SURFACE)
+                    )
+                    with me.box(style=me.Style(cursor="help")):
+                        me.icon("help_outline", style=me.Style(
+                            color=Theme.ON_SURFACE_VARIANT,
+                            font_size=16
+                        ))
+
+                # Organization
+                with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                    me.checkbox(
+                        label="Organize files by series",
+                        checked=int(app_state.organize_by_series),
+                        on_change=toggle_organize_by_series,
+                        style=me.Style(color=Theme.ON_SURFACE)
+                    )
+                    with me.box(style=me.Style(cursor="help")):
+                        me.icon("help_outline", style=me.Style(
+                            color=Theme.ON_SURFACE_VARIANT,
+                            font_size=16
+                        ))
+
+                # Performance
+                with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_3)):
+                    me.text("Download threads:", style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY,
+                        color=Theme.ON_SURFACE,
+                        min_width="140px"
+                    ))
+                    me.input(
+                        label="",
+                        value=str(app_state.thread_count),
+                        on_blur=on_thread_count_change,
+                        style=me.Style(width="80px")
+                    )
+                    with me.box(style=me.Style(cursor="help")):
+                        me.icon("help_outline", style=me.Style(
+                            color=Theme.ON_SURFACE_VARIANT,
+                            font_size=16
+                        ))
 
         # Advanced Settings Toggle
-        me.text("Advanced Settings", style=me.Style(
-            font_size=Theme.FONT_SIZE_H4,
-            font_weight=Theme.FONT_WEIGHT_MEDIUM,
-            margin=me.Margin(top=Theme.SPACE_4, bottom=Theme.SPACE_3),
-            color=Theme.ON_SURFACE
-        ))
+        with me.box(style=me.Style(
+            margin=me.Margin(top=Theme.SPACE_4),
+            padding=me.Padding.all(Theme.SPACE_3),
+            background=Theme.SECONDARY + "08",
+            border_radius=Theme.RADIUS_MD,
+            border=me.Border.all(me.BorderSide(width=1, color=Theme.SECONDARY + "20"))
+        )):
+            with me.box(style=me.Style(display="flex", align_items="center", justify_content="space-between")):
+                with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                    me.icon("expand_more" if app_state.show_advanced_settings else "expand_less", 
+                           style=me.Style(color=Theme.SECONDARY, font_size=20))
+                    me.text("Advanced Settings", style=me.Style(
+                        font_size=Theme.FONT_SIZE_H5,
+                        font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                        color=Theme.ON_SURFACE
+                    ))
+                me.checkbox(
+                    label="",
+                    checked=int(app_state.show_advanced_settings),
+                    on_change=toggle_advanced_settings,
+                    style=me.Style(color=Theme.SECONDARY)
+                )
 
-        with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
-            me.checkbox(
-                label="Show Advanced Settings",
-                checked=int(app_state.show_advanced_settings),
-                on_change=toggle_advanced_settings,
-                style=me.Style(color=Theme.ON_SURFACE)
-            )
+            me.text("Fine-tune connection settings, timeouts, and logging for advanced users.", style=me.Style(
+                font_size=Theme.FONT_SIZE_BODY,
+                color=Theme.ON_SURFACE_VARIANT,
+                margin=me.Margin(top=Theme.SPACE_1)
+            ))
 
         # Advanced Settings Panel
         if app_state.show_advanced_settings:
@@ -865,14 +1710,36 @@ def settings_content():
                 border_radius=Theme.RADIUS_MD,
                 border=me.Border.all(me.BorderSide(width=1, color=Theme.OUTLINE_VARIANT))
             )):
-                me.text("HTTP/Connection Settings", style=me.Style(
-                    font_size=Theme.FONT_SIZE_H5,
+                # Download Options
+                me.text("Download Behavior", style=me.Style(
+                    font_size=Theme.FONT_SIZE_H6,
                     font_weight=Theme.FONT_WEIGHT_MEDIUM,
-                    margin=me.Margin(bottom=Theme.SPACE_3),
+                    margin=me.Margin(bottom=Theme.SPACE_2),
                     color=Theme.ON_SURFACE
                 ))
 
-                with me.box(style=me.Style(display="grid", grid_template_columns="1fr 1fr", gap=Theme.SPACE_3)):
+                with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_2, margin=me.Margin(bottom=Theme.SPACE_4))):
+                    with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                        me.checkbox(
+                            label="Download all versions of each specification",
+                            checked=int(app_state.download_all_versions),
+                            on_change=toggle_download_all_versions,
+                            style=me.Style(color=Theme.ON_SURFACE)
+                        )
+                        me.icon("help_outline", style=me.Style(
+                            color=Theme.ON_SURFACE_VARIANT,
+                            font_size=16
+                        ))
+
+                # Connection Settings
+                me.text("Connection Settings", style=me.Style(
+                    font_size=Theme.FONT_SIZE_H6,
+                    font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                    margin=me.Margin(bottom=Theme.SPACE_2),
+                    color=Theme.ON_SURFACE
+                ))
+
+                with me.box(style=me.Style(display="grid", grid_template_columns="1fr 1fr", gap=Theme.SPACE_3, margin=me.Margin(bottom=Theme.SPACE_4))):
                     # Max Connections
                     with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
                         me.text("Max Connections:", style=me.Style(
@@ -888,7 +1755,7 @@ def settings_content():
 
                     # Max Connections Per Host
                     with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
-                        me.text("Max Connections Per Host:", style=me.Style(
+                        me.text("Max Per Host:", style=me.Style(
                             font_size=Theme.FONT_SIZE_CAPTION,
                             color=Theme.ON_SURFACE_VARIANT
                         ))
@@ -901,7 +1768,7 @@ def settings_content():
 
                     # Total Timeout
                     with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
-                        me.text("Total Timeout (seconds):", style=me.Style(
+                        me.text("Total Timeout (sec):", style=me.Style(
                             font_size=Theme.FONT_SIZE_CAPTION,
                             color=Theme.ON_SURFACE_VARIANT
                         ))
@@ -914,7 +1781,7 @@ def settings_content():
 
                     # Connect Timeout
                     with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
-                        me.text("Connect Timeout (seconds):", style=me.Style(
+                        me.text("Connect Timeout (sec):", style=me.Style(
                             font_size=Theme.FONT_SIZE_CAPTION,
                             color=Theme.ON_SURFACE_VARIANT
                         ))
@@ -924,6 +1791,27 @@ def settings_content():
                             on_blur=on_connect_timeout_change,
                             style=me.Style(width="100%")
                         )
+
+                # Logging Settings
+                me.text("Logging", style=me.Style(
+                    font_size=Theme.FONT_SIZE_H6,
+                    font_weight=Theme.FONT_WEIGHT_MEDIUM,
+                    margin=me.Margin(bottom=Theme.SPACE_2),
+                    color=Theme.ON_SURFACE
+                ))
+
+                with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_2)):
+                    with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_2)):
+                        me.checkbox(
+                            label="Verbose logging",
+                            checked=int(app_state.verbose_logging),
+                            on_change=toggle_verbose_logging,
+                            style=me.Style(color=Theme.ON_SURFACE)
+                        )
+                        me.icon("help_outline", style=me.Style(
+                            color=Theme.ON_SURFACE_VARIANT,
+                            font_size=16
+                        ))
 
 def logs_content():
     """Logs tab content"""
@@ -1009,6 +1897,16 @@ def start_scraping(e: me.ClickEvent):
         except Exception as ex:
             app_state.scraping_status = "error"
             update_scraping_progress(0, f"Scraping error: {str(ex)}")
+            show_error_notification(
+                "Scraping Failed",
+                str(ex),
+                [
+                    "Check your internet connection",
+                    "Try reducing thread count in settings",
+                    "Check the logs tab for more details",
+                    "Try scraping again in a few minutes"
+                ]
+            )
 
     threading.Thread(target=run_scraping, daemon=True).start()
 
@@ -1026,7 +1924,7 @@ def filter_versions(e: me.ClickEvent):
 
     def run_filtering():
         try:
-            success = filter_latest_versions()
+            success = filter_latest_versions(input_file='downloads/links.json', output_file='downloads/latest.json')
             if success:
                 add_log_message("Version filtering completed")
                 load_available_files()
@@ -1034,6 +1932,15 @@ def filter_versions(e: me.ClickEvent):
                 add_log_message("Version filtering failed")
         except Exception as ex:
             add_log_message(f"Filtering error: {str(ex)}")
+            show_error_notification(
+                "Version Filtering Failed",
+                str(ex),
+                [
+                    "Ensure links.json exists from a successful scrape",
+                    "Check file permissions in the downloads folder",
+                    "Try scraping again to regenerate links.json"
+                ]
+            )
 
     threading.Thread(target=run_filtering, daemon=True).start()
 
@@ -1073,6 +1980,12 @@ def confirm_download(e: me.ClickEvent):
     app_state.download_progress = 0
     add_log_message(f"Starting download of {len(selected_urls)} files...")
 
+    # Reset progress callback state
+    if hasattr(download_progress_callback, 'total_files'):
+        delattr(download_progress_callback, 'total_files')
+    if hasattr(download_progress_callback, 'completed_files'):
+        delattr(download_progress_callback, 'completed_files')
+
     # Run download in background thread
     def run_download():
         try:
@@ -1083,7 +1996,8 @@ def confirm_download(e: me.ClickEvent):
             with open('selected.json', 'w') as f:
                 json.dump(filtered_data, f, indent=2)
 
-            update_download_progress(20, "Starting downloads...")
+            update_download_progress(50, f"Downloading {len(selected_urls)} files...")
+            
             success = download_data_with_config(
                 input_file='selected.json',
                 resume=app_state.resume_downloads,
@@ -1092,9 +2006,10 @@ def confirm_download(e: me.ClickEvent):
                 organize_by_series=app_state.organize_by_series,
                 specific_release=app_state.specific_release,
                 threads=app_state.thread_count,
-                verbose=app_state.verbose_logging
+                verbose=app_state.verbose_logging,
+                progress_callback=download_progress_callback
             )
-
+            
             if success:
                 app_state.download_status = "completed"
                 update_download_progress(100, "All downloads completed successfully")
@@ -1105,6 +2020,17 @@ def confirm_download(e: me.ClickEvent):
         except Exception as ex:
             app_state.download_status = "error"
             update_download_progress(0, f"Download error: {str(ex)}")
+            show_error_notification(
+                "Download Failed",
+                str(ex),
+                [
+                    "Check your internet connection",
+                    "Verify selected files are still available",
+                    "Try reducing thread count in settings",
+                    "Check available disk space",
+                    "Check the logs tab for more details"
+                ]
+            )
 
     threading.Thread(target=run_download, daemon=True).start()
 
@@ -1208,6 +2134,7 @@ def load_available_files():
                 with open(latest_path, 'r') as f:
                     app_state.available_files = json.load(f)
                 add_log_message(f"Loaded {len(app_state.available_files)} available files from {latest_path}")
+                app_state.current_file_type = "filtered"
                 return
         
         # If no latest.json found, try links.json as fallback
@@ -1217,13 +2144,16 @@ def load_available_files():
                 with open(links_path, 'r') as f:
                     app_state.available_files = json.load(f)
                 add_log_message(f"Loaded {len(app_state.available_files)} available files from {links_path} (fallback)")
+                app_state.current_file_type = "all"
                 return
         
         app_state.available_files = []
         add_log_message("No available files found (neither latest.json nor links.json exist)")
+        app_state.current_file_type = "none"
     except Exception as ex:
         add_log_message(f"Error loading available files: {str(ex)}")
         app_state.available_files = []
+        app_state.current_file_type = "none"
 
 def on_file_selection_change(e: me.CheckboxChangeEvent):
     """Handle file selection changes"""
@@ -1235,15 +2165,50 @@ def on_file_selection_change(e: me.CheckboxChangeEvent):
         if url in app_state.selected_files:
             app_state.selected_files.remove(url)
 
-def select_all_files():
-    """Select all available files"""
-    app_state.selected_files = [file_info.get('url', '') for file_info in app_state.available_files if file_info.get('url')]
-    add_log_message(f"Selected all {len(app_state.selected_files)} files")
+def select_all_files(e: me.ClickEvent):
+    """Select all filtered files"""
+    filtered_files = get_filtered_files()
+    for file_info in filtered_files:
+        url = file_info.get('url', '')
+        if url and url not in app_state.selected_files:
+            app_state.selected_files.append(url)
+    add_log_message(f"Selected all {len([f for f in filtered_files if f.get('url') in app_state.selected_files])} filtered files")
 
-def deselect_all_files():
+def deselect_all_files(e: me.ClickEvent):
     """Deselect all files"""
     app_state.selected_files = []
     add_log_message("Deselected all files")
+
+def on_search_change(e: me.InputBlurEvent):
+    """Handle search query changes"""
+    app_state.search_query = e.value
+
+def on_series_filter_change(e: me.SelectSelectionChangeEvent):
+    """Handle series filter changes"""
+    app_state.series_filter = str(e.value)
+
+def on_release_filter_change(e: me.SelectSelectionChangeEvent):
+    """Handle release filter changes"""
+    app_state.release_filter = str(e.value)
+
+def get_filtered_files() -> List[Dict]:
+    """Get files filtered by search query and filters"""
+    files = app_state.available_files
+    
+    # Apply search filter
+    if app_state.search_query:
+        query = app_state.search_query.lower()
+        files = [f for f in files if query in f.get('name', '').lower() or query in f.get('url', '').lower()]
+    
+    # Apply series filter
+    if app_state.series_filter != "All":
+        files = [f for f in files if f.get('series', '') == app_state.series_filter]
+    
+    # Apply release filter
+    if app_state.release_filter != "All":
+        files = [f for f in files if str(f.get('release', '')) == app_state.release_filter]
+    
+    return files
 
 def change_page(new_page: int):
     """Change the current page for file pagination"""
@@ -1254,5 +2219,4 @@ def change_page(new_page: int):
 
 # Initialize available files and settings on startup
 load_available_files()
-load_settings()
 load_settings()

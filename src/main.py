@@ -269,7 +269,8 @@ def scrape_data_with_config(resume: bool = False, no_download: bool = False, all
 
 def download_data_with_config(input_file: str = 'latest.json', resume: bool = False, no_download: bool = False, 
                             all_versions: bool = False, organize_by_series: bool = False, 
-                            specific_release: int = None, threads: int = 5, verbose: bool = False) -> bool:
+                            specific_release: int = None, threads: int = 5, verbose: bool = False, 
+                            progress_callback=None) -> bool:
     """
     Enhanced download function with configuration options
     """
@@ -285,7 +286,7 @@ def download_data_with_config(input_file: str = 'latest.json', resume: bool = Fa
         
         dest_dir = 'downloads/By-Series' if organize_by_series else 'downloads/By-Release'
         
-        success = download_pdfs(input_file=input_file, dest_dir=dest_dir, concurrency=threads)
+        success = download_pdfs(input_file=input_file, dest_dir=dest_dir, concurrency=threads, callback=progress_callback)
         if success:
             logger.info("Download completed successfully")
             return True
