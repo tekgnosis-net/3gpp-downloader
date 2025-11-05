@@ -77,6 +77,13 @@ npm run dev -- --host 0.0.0.0 --port 5173
 - Never push directly to `main`; open a pull request from your feature branch instead so reviews and CI can run before merges.
 - Keep commits focused and include verification steps (e.g., `python -m pytest`, `npm run build`) in your PR description to document test coverage.
 
+### Versioning & releases
+
+- We use [semantic-release](https://semantic-release.gitbook.io) with the Conventional Commits spec to manage versions, changelog entries, and GitHub releases.
+- The first automated release will produce `v1.0.0`; subsequent merges to `main` will bump versions according to commit types (`feat` → minor, `fix` → patch, `BREAKING CHANGE` → major).
+- The release workflow (`.github/workflows/release.yml`) also publishes multi-tagged container images to GitHub Container Registry: `${{github.repository}}:<semver>` and `latest`.
+- Ensure feature branch commits follow the Conventional Commits format (e.g., `feat(api): add scrape summary endpoint`) so automated version bumps stay accurate.
+
 ## Workflows
 
 ### Web dashboard
