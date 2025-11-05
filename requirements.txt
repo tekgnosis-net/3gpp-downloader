@@ -6,4 +6,5 @@ scrapy==2.13.3
 urllib3==2.5.0
 aiohttp==3.12.15
 aiofiles==24.1.0
-mesop==1.1.0
+fastapi==0.115.5
+uvicorn[standard]==0.32.0

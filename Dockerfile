@@ -52,13 +52,14 @@ RUN mkdir -p downloads logs
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 ENV APP_VERSION=${APP_VERSION}
+ENV FRONTEND_DIST=/app/frontend/dist
 
 # Expose port for web UI
 EXPOSE 32123
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:32123')" || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:32123/api/health')" || exit 1
 
 # Default command to run web UI
 CMD ["python", "run_web.py"]
