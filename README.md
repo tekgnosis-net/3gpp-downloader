@@ -1,277 +1,164 @@
 # 3GPP Downloader
 
-A comprehensive tool for downloading 3GPP specification documents with both command-line and web interfaces.
+3GPP Downloader automates the discovery and download of official 3GPP specification PDFs. This branch (`feature/chakra-ui-refactor`) pairs a FastAPI backend with a Chakra UI + React frontend.
 
-## Features
+## Highlights
 
-- 🚀 **High-performance downloads** with multipart support and connection pooling
-- 🕷️ **Intelligent scraping** of ETSI website for latest specifications
-- 🌐 **Web UI** built with Mesop for easy management
-- 🐳 **Docker support** for containerized deployment
-- 📊 **Real-time progress** tracking and logging
-- 🔄 **Automatic retry** with exponential backoff
-- 📁 **Organized storage** by series and release
+- 🚀 High-throughput downloads with aiohttp streaming, resumable selection, and progress telemetry.
+- 🕷️ Scrapy pipeline builds JSON manifests (`links.json`, `latest.json`) for both CLI and UI workflows.
+- 📑 Filtering keeps the highest version per TS number *per release* so multi-release archives stay accurate.
+- 🧭 Server-side pagination via `/api/files` keeps the UI responsive even with large catalogs.
+- ✅ Bulk selection helpers and cooperative cancellation (`/api/download/stop`) improve long-running jobs.
+- 🪵 Live activity log, download timeline, auto-scroll toggles, and persistent filters for quick context.
+- 🧭 Inline help popover keeps onboarding friction low without leaving the dashboard.
+- 🐳 Docker image bundles FastAPI, workers, and the production React build.
 
+---
+
+## Architecture
+
+```
+frontend/             Chakra UI + Vite SPA
+ ├─ src/App.tsx       Dashboard: controls, tables, telemetry
+ └─ ...               Hooks, components, theme/infrastructure
+
+src/api/              FastAPI backend
+ ├─ server.py         REST API, background jobs, static hosting
+ └─ state_manager.py  Thread-safe state + settings persistence
+
+src/tools/            Core engines
+ ├─ etsi_spider.py    Scrapy spider producing link manifests
+ ├─ json_downloader.py Async downloader with cancellation support
+ └─ monitored_pool.py  Connection pool helpers
+
+src/main.py           CLI workflows (scrape/filter/download)
+run_web.py            FastAPI + frontend launcher
+downloads/, logs/     Data + log volumes (auto-created/mounted)
+```
+
+---
 ## Quick Start
 
-### Option 1: Docker (Recommended)
+### Docker (recommended)
 
 ```bash
-# Clone the repository
-git clone <repository-url>
+git clone https://github.com/<your-org>/3gpp-downloader.git
 cd 3gpp-downloader
-
-# Start with Docker Compose
-docker-compose up -d
-# Or with newer Docker versions:
-docker compose up -d
-
-# Open your browser to http://localhost:8080
+docker compose up --build -d
+docker compose logs -f
 ```
 
-### Option 2: Local Installation
+- UI default: `http://localhost:8085` (mapped to container port `32123`).
+- API inside the container: `http://localhost:32123`.
+- Bind mounts: `./downloads` (PDFs) and `./logs` (runtime logs).
 
-#### Using Virtual Environment (Recommended)
+### Local development
 
 ```bash
-# Create virtual environment
-python3 -m venv venv
-
-# Activate virtual environment
-# On Linux/Mac:
-source venv/bin/activate
-# On Windows:
-# venv\Scripts\activate
-
-# Install dependencies
+# Backend
+python -m venv .venv
+source .venv/bin/activate  # Linux/macOS
+.\.venv\Scripts\Activate.ps1  # Windows (PowerShell)
+pip install --upgrade pip
 pip install -r requirements.txt
+uvicorn src.api.server:app --reload --port 32123
 
-# Run web interface
-python run_web.py
-
-# Deactivate when done
-deactivate
+# Frontend
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-#### Direct Installation (Not Recommended)
+- API base URL default: `http://localhost:32123/api` (override via `VITE_API_BASE_URL`).
+
+## Workflows
+
+### Web dashboard
+
+1. **Scrape** – `Start Scraping` triggers `/api/scrape`; Scrapy runs in a background thread and writes `links.json`.
+2. **Filter** – Toggle “Latest versions only” to call `/api/filter`; backend keeps the highest version per release in memory.
+3. **Explore** – Table uses `/api/files` for search, release/series filters, sorting, and pagination.
+  - “Select all X files” targets the entire filtered dataset.
+  - Header checkbox toggles the current page selection.
+4. **Download** – `Download Selected` posts to `/api/download`; backend writes `selected.json` and streams downloads with progress callbacks.
+5. **Stop** – `Stop Download` invokes `/api/download/stop` for cooperative cancellation.
+6. **Monitor** – Activity log, download timeline, and progress cards update live; auto-scroll toggles keep long runs readable.
+
+### CLI parity
 
 ```bash
-# Install dependencies globally (not recommended)
-pip install -r requirements.txt
-
-# Run web interface
-python run_web.py
-
-# Or use command line
-python -m src.main scrape download
+python -m src.main scrape            # Scrape ETSI -> downloads/links.json
+python -m src.main filter            # Filter -> downloads/latest.json
+python -m src.main download          # Download from latest.json / selected.json
+python -m src.main scrape download   # One-shot pipeline
 ```
 
-## Usage
+### REST endpoints (excerpt)
 
-### Web Interface
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET    | `/api/state`         | Runtime snapshot (logs, progress, files, settings) |
+| POST   | `/api/scrape`        | Start scraping (`force: true` clears cached JSON) |
+| POST   | `/api/filter`        | Filter latest versions (`clear: true` reloads all) |
+| POST   | `/api/files`         | Server-side pagination, filtering, sorting |
+| POST   | `/api/download`      | Begin download batch (`{"urls": [...]}`) |
+| POST   | `/api/download/stop` | Request cooperative cancellation |
+| POST   | `/api/files/reload`  | Reload manifests from disk |
+| POST   | `/api/logs/clear`    | Clear in-memory log buffer |
 
-1. Open http://localhost:8080 in your browser
-2. Click "Start Scraping" to discover available specifications
-3. Click "Filter Latest Versions" to get the most recent documents
-4. Select files to download and click "Start Download"
-5. Monitor progress in real-time through the web interface
-
-### Command Line Interface
-
-```bash
-# Full pipeline: scrape and download
-python -m src.main scrape download
-
-# Only scrape for links
-python -m src.main scrape
-
-# Only download from existing links.json
-python -m src.main download
-
-# Filter to latest versions only
-python -m src.main filter
-```
-
-## Project Structure
-
-```
-3gpp-downloader/
-├── src/
-│   ├── main.py                 # CLI entry point
-│   ├── web_app.py             # Mesop web application
-│   ├── tools/
-│   │   ├── json_downloader.py # Core download logic
-│   │   ├── etsi_spider.py     # Scrapy spider
-│   │   └── monitored_pool.py  # Connection management
-│   └── utils/
-│       └── logging_config.py  # Logging setup
-├── downloads/                 # Downloaded files (auto-created)
-├── logs/                      # Application logs (auto-created)
-├── requirements.txt           # Python dependencies
-├── run_web.py                # Web UI launcher
-├── Dockerfile                 # Docker image definition
-├── docker-compose.yml         # Docker Compose configuration
-└── README.md                  # This file
-```
+OpenAPI docs: `http://localhost:32123/docs` (when enabled).
 
 ## Configuration
 
-### Environment Variables
+1. Copy `.env.example` ➜ `.env` to customise runtime defaults.
+2. Key environment groups:
+  - `MAIN_*`, `JSON_DOWNLOADER_*`, `ETSI_SPIDER_*`, `MONITORED_POOL_*` – logging names, destinations, levels.
+  - `SCRAPY_*` – concurrency, delay, user agent for the spider.
+  - `HTTP_*`, `DOWNLOAD_*` – aiohttp pooling, timeouts, retry thresholds.
+  - `RETRY_*` – exponential backoff defaults.
+  - `API_CORS_ORIGINS` – comma-separated list of allowed web origins for the FastAPI CORS middleware.
+3. Frontend preferences persist to `web_settings.json` (thread count, resume mode, organise-by-series, auto-scroll, etc.).
+4. Table filters persist in the browser to make reopening the dashboard faster.
 
-The application supports extensive configuration through environment variables. Copy `.env.example` to `.env` and modify values as needed:
-
-```bash
-cp .env.example .env
-# Edit .env with your preferred settings
-```
-
-#### Key Configuration Areas:
-
-- **Logging**: Separate log levels and files for each module
-- **HTTP Client**: Connection pooling, timeouts, retry logic
-- **Download**: Chunk sizes, multipart thresholds
-- **Scrapy**: Request delays, concurrency limits
-- **Web UI**: Port, logging, display options
-
-### Command Line Arguments
+## Testing & Tooling
 
 ```bash
-# Full pipeline: scrape and download
-python -m src.main scrape download
-
-# Only scrape for links
-python -m src.main scrape
-
-# Only download from existing links.json
-python -m src.main download
-
-# Filter to latest versions only
-python -m src.main filter
-```
-
-## Docker Deployment
-
-### Build and Run
-
-```bash
-# Build the image
-docker build -t gpp-downloader .
-
-# Run the container
-docker run -p 8080:32123 -v $(pwd)/downloads:/app/downloads gpp-downloader
-
-# Or use Docker Compose
-docker-compose up -d
-# Or: docker compose up -d
-```
-
-### Persistent Storage
-
-Downloads and logs are persisted in Docker volumes:
-- `./downloads` - Downloaded PDF files
-- `./logs` - Application log files
-
-## Development
-
-### Setup
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd 3gpp-downloader
-
-# Create and activate virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Optional: Install in development mode for local changes
-pip install -e .
-```
-
-### Adding New Features
-
-1. CLI features go in `src/main.py`
-2. Web UI features go in `src/web_app.py`
-3. Download logic in `src/tools/json_downloader.py`
-4. Scraping logic in `src/tools/etsi_spider.py`
-
-### Testing
-
-```bash
-# Run tests
+source .venv/bin/activate
 python -m pytest
-
-# Check code quality
 flake8 src/
 mypy src/
+
+cd frontend
+npm run lint
+npm run build
 ```
-
-### Virtual Environment Tips
-
-- Always activate the virtual environment before working: `source venv/bin/activate`
-- Install new dependencies with: `pip install package-name`
-- Save dependencies to requirements.txt: `pip freeze > requirements.txt`
-- Deactivate when done: `deactivate`
 
 ## Troubleshooting
 
-### Common Issues
+| Symptom | Suggested fix |
+|---------|----------------|
+| UI unreachable via Docker | Ensure `docker compose up --build -d` finished; confirm port mapping `8085:32123`. |
+| “Download already in progress” | Wait for completion or click `Stop Download`; button re-enables once idle. |
+| “Invalid Date” entries | Update to the latest frontend build (timestamp formatter patched). |
+| Empty table after filtering | Refresh; backend resets pagination for filtered datasets. Ensure `/api/files` reports `file_type: filtered`. |
+| `ModuleNotFoundError: pytest` | Install dev dependency in the venv: `pip install pytest`. |
+| Large bundle warning | Manual chunking already separates React/Chakra/icons; adjust `frontend/vite.config.ts` if adding large libs. |
 
-1. **Virtual environment not activated**
-   ```bash
-   # Make sure to activate before running
-   source venv/bin/activate
-   python run_web.py
-   ```
+Logs:
 
-2. **Port 8080 already in use**
-   ```bash
-   # Change port in docker-compose.yml
-   ports:
-     - "8081:32123"
-   ```
-
-3. **Permission errors**
-   ```bash
-   # Fix permissions on downloads directory
-   sudo chown -R $USER:$USER downloads/
-   ```
-
-3. **Slow downloads**
-   - Check your internet connection
-   - The app automatically optimizes for your speed
-   - Consider increasing timeouts in the code
-
-### Logs
-
-Check logs for detailed information:
 ```bash
-# View application logs
 tail -f logs/json_downloader.log
-
-# View Docker logs
-docker-compose logs -f
-# Or: docker compose logs -f
+docker compose logs -f
 ```
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+1. Branch from `feature/chakra-ui-refactor`.
+2. Run backend + frontend checks (`python -m pytest`, `npm run lint`).
+3. Cover new API/UI behaviour with tests or manual verification steps.
+4. Submit a PR summarising changes and test evidence.
 
-## License
+## License & Credits
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- Built with [Mesop](https://google.github.io/mesop/) for the web interface
-- Uses [aiohttp](https://docs.aiohttp.org/) for async downloads
-- Powered by [Scrapy](https://scrapy.org/) for web scraping
-- Containerized with Docker
+- MIT License (see `LICENSE`).
+- Built with FastAPI, Scrapy, aiohttp, Chakra UI, React, and Vite.

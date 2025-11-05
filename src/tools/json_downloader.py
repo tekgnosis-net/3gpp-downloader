@@ -229,7 +229,7 @@ async def _fetch_and_write(
             local_size = dest_path.stat().st_size
             if local_size == remote_size:
                 logger.info(f"[fetch_and_write] Skipping {dest_path} (size matches)")
-                return
+                return True
 
         logger.debug(f"[fetch_and_write] Downloading {url} to {dest_path} (remote size: {remote_size} bytes)")
         # 4️⃣  Perform the download: use multipart if supported and file is large enough
@@ -267,18 +267,21 @@ async def _fetch_and_write(
             async with aiofiles.open(dest_path, "wb") as f:
                 await f.write(data)
         logger.info(f"[fetch_and_write] Downloaded {dest_path} ({remote_size} bytes)")
+        return True
     except aiohttp.ClientError as e:
         logger.error(f"aiohttp error for {url}: {e}")
-        return
+        return False
     except RuntimeError as e:
         logger.error(f"Runtime error (e.g., session closed) for {url}: {e}")
-        return
+        return False
     except Exception as e:
         logger.error(f"Unexpected error for {url}: {e}")
-        return
+        return False
     finally:
         if close_session:
             await session.close()
+
+    return True
 
 # ------------------------------------------------------------------
 #  _download_all()
@@ -310,43 +313,84 @@ async def _download_all(
     -------
     None – side‑effects happen inside this coroutine.
     """
-    # Create a shared session for all downloads
+    total_items = len(items)
+    if total_items == 0:
+        return True
+
+    completed = 0
+    processed = 0
+    errors = 0
+
     session = get_session()
     try:
-        # Create a semaphore that will allow *concurrency* tasks at once
         sem = asyncio.Semaphore(concurrency)
+        lock = asyncio.Lock()
+        pbar = None
 
-        with tqdm_asyncio(total=len(items), desc="Downloading") as pbar:
-            for idx, item in enumerate(items):
-                url   = item["url"]
-                series = item.get("series", "0")
-                release = item.get("release","0")
+        async def download_item(item):
+            nonlocal completed, processed, errors
 
-                # Build the destination path
-                dest_path = (
-                    base_dir
-                    / f"rel-{release}"
-                    / f"series-{series}"
-                    / Path(url).name
-                )
-                # Start the download within the semaphore context
-                if callback:
-                    callback(Path(url).name, "starting", 0)
+            url = item["url"]
+            series = item.get("series", "0")
+            release = item.get("release", "0")
+            filename = Path(url).name
+
+            dest_path = (
+                base_dir
+                / f"rel-{release}"
+                / f"series-{series}"
+                / filename
+            )
+
+            if callback:
+                callback(filename, "starting", 0.0)
+
+            try:
                 async with sem:
-                    # Create a progress callback for this file
-                    def file_progress(pct):
+                    def file_progress(pct: float):
                         if callback:
-                            callback(Path(url).name, "progress", pct)
-                    
-                    await _fetch_and_write(url, dest_path, session=session, progress_callback=file_progress)
-                    # Call the optional callback
+                            callback(filename, "file_progress", pct)
+
+                    success = await _fetch_and_write(
+                        url,
+                        dest_path,
+                        session=session,
+                        progress_callback=file_progress,
+                    )
+            except Exception as exc:
+                logger.error(f"Unexpected error downloading {url}: {exc}")
+                success = False
+
+            async with lock:
+                processed += 1
+                if success:
+                    completed += 1
                     if callback:
-                        callback(Path(url).name, "progress", int((idx + 1) / len(items) * 100))
-                    pbar.update(1)
+                        callback(filename, "file_complete", 100.0)
+                else:
+                    errors += 1
+                    if callback:
+                        callback(filename, "error", 0.0)
+
+                overall_pct = (processed / total_items) * 100 if total_items else 100.0
                 if callback:
-                    callback(Path(url).name, "finished", 100)
+                    callback("__overall__", "overall_progress", overall_pct)
+
+                if pbar is not None:
+                    pbar.update(1)
+
+        with tqdm_asyncio(total=total_items, desc="Downloading") as pbar:
+            tasks = [asyncio.create_task(download_item(item)) for item in items]
+            await asyncio.gather(*tasks)
+
+        if callback:
+            callback("__overall__", "all_finished", 100.0)
+            if errors:
+                callback("__overall__", "errors", errors)
     finally:
         await session.close()
+
+    return errors == 0
 
 # ------------------------------------------------------------------
 #  download_from_json()
@@ -360,7 +404,7 @@ async def download_from_json(
         concurrency: int = 10,
         verbose: bool = True,
         progress_callback=None,
-) -> None:
+) -> bool:
     """
     High‑level helper that glues all the pieces together.
 
@@ -375,12 +419,20 @@ async def download_from_json(
     concurrency   : how many downloads run in parallel
     verbose       : if True, a tqdm progress bar is shown
     progress_callback : callable | None
-        Optional function that will receive (filename, status, percent_of_100)
-        Example: lambda fn,pct: print(f"✓ {fn} finished at {pct}%")
+        Optional function receiving (identifier, status, value).
+        Status values:
+            - "starting": file download about to begin
+            - "file_progress": per-file percentage (value 0-100)
+            - "file_complete": file finished successfully (value 100)
+            - "error": file failed (value unused)
+            - "overall_progress": aggregate percent of processed files
+            - "all_finished": all downloads completed (value 100)
+            - "errors": number of files that failed
 
     Returns
     -------
-    None – all side‑effects happen inside this coroutine.
+    bool
+        True when all downloads succeed, False if any files fail.
     """
     # 1️⃣  Load the JSON file
     src_path = Path(src_file)
@@ -391,7 +443,7 @@ async def download_from_json(
     if verbose:
         logger.info(f"[json_downloader] → downloading {len(data)} URLs to {dest_dir}")
 
-    await _download_all(
+    return await _download_all(
         items=data,
         base_dir=Path(dest_dir),
         concurrency=concurrency,
@@ -412,7 +464,7 @@ if __name__ == "__main__":
             release_key="release",
             concurrency=8,
             verbose=True,
-            progress_callback=lambda fn,pct: print(f"✓ {fn} finished at {pct}%")
+            progress_callback=lambda name, status, value: print(f"event={status} target={name} value={value}")
         )
 
     asyncio.run(main())

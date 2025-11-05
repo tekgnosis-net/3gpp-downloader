@@ -1,9 +1,9 @@
 services:
   3gpp-downloader:
-    build: .
+    image: ghcr.io/tekgnosis-net/3gpp-downloader:latest
+    pull_policy: always
     ports:
-      - "8081:32123"
-    image: 3gpp-downloader:latest
+      - "8085:32123"
     volumes:
       # Persist downloads and logs
       - ./downloads:/app/downloads

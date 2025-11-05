@@ -60,13 +60,13 @@ def download_pdfs(input_file: str = 'latest.json', dest_dir: str = 'downloads/pd
 
         # Download the PDFs using the JSON downloader utility
     import asyncio
-    asyncio.run(download_from_json(
+    result = asyncio.run(download_from_json(
         src_file=input_file,
         dest_dir=str(dest_path),
         concurrency=concurrency,
         progress_callback=callback
     ))
-    return True
+    return bool(result)
 
 def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'latest.json') -> bool:
     """
@@ -100,24 +100,44 @@ def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'l
 
     # Group by ts_number using defaultdict
     grouped = defaultdict(list)
+    skipped_items = 0
     for item in data:
-        grouped[item['ts_number']].append(item)
+        ts_number = item.get('ts_number') or item.get('ts')
+        version = item.get('version')
+        if not ts_number or not version:
+            skipped_items += 1
+            continue
+        grouped[ts_number].append(item)
     
     # For each group, find the item with the highest version
     filtered = []
     for ts, items in grouped.items():
         # Sort by version, assuming version is like '18.10.00'
         def version_key(item):
-            v = item['version']
-            return tuple(int(x) for x in v.split('.'))
+            raw_version = str(item.get('version', '0'))
+            components = []
+            for segment in raw_version.split('.'):
+                try:
+                    components.append(int(segment))
+                except ValueError:
+                    # Fall back to numeric prefix when version contains letters
+                    digits = ''.join(ch for ch in segment if ch.isdigit())
+                    components.append(int(digits) if digits else 0)
+            return tuple(components or [0])
         
         latest = max(items, key=version_key)
         filtered.append(latest)
     
+    if skipped_items:
+        logger.warning(f"Skipped {skipped_items} entries missing ts_number/version while filtering {input_file}.")
+    if not filtered:
+        logger.error("No valid specifications found after filtering; aborting.")
+        return False
+
     # Write to output file
     output_path = Path(output_file)
     with output_path.open('w') as f:
-        json.dump(filtered, f, indent=0)
+        json.dump(filtered, f, indent=2)
     
     end_time = time.time()
     elapsed = end_time - start_time
@@ -163,41 +183,53 @@ def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log
     # Measure the time taken for scraping
     start_time = time.time()
     logger.info("Scraping started...")
-    process.start()
+    process.start(install_signal_handlers=False)
     end_time = time.time()
     elapsed = end_time - start_time
     logger.info(f"Scraping completed in {elapsed:.2f} seconds.")
-    # find the last log entry with stats and print it
-    if Path(logfile).exists():
-        with open(logfile, 'r') as f:
-            lines = f.readlines()
-            for line in reversed(lines):
-                if re.search(r'Crawled \d+ pages', line):
-                    logger.info(f"Scraper stats: {line.strip()}")
-                    break
-    # Check if logfile exists and grab the stat line: Dumping Scrapy stats and return it as a dict for further processing if needed else send an empty dict
-    if Path(logfile).exists():
-        with open(logfile, 'r') as f:
-            lines = f.readlines()
-            for line in reversed(lines):
-                if re.search(r'Dumping Scrapy stats:', line):
-                    logger.info(f"Scrapy stats: {line.strip()}")
-                    # Extract the JSON stats block
-                    json_stats = []
-                    for line in lines[lines.index(line) + 1:]:
-                        if line.strip() == "":
-                            break
-                        json_stats.append(line.strip())
-                    # Parse the JSON stats
-                    try:
-                        stats = json.loads("\n".join(json_stats))
-                        logger.info(f"Parsed Scrapy stats: {stats}")
-                        return stats
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse Scrapy stats: {e}")
-                        return {}
-    logger.warning("No Scrapy stats found.")
-    return {}
+
+    stats = process.stats.get_stats() or {}
+    links_path = Path('downloads/links.json')
+
+    if stats:
+        logger.info(f"Scrapy stats collected: {stats}")
+    else:
+        logger.warning("Scrapy stats collector returned empty results.")
+
+    # Ensure we always report whether the output artifact exists
+    stats['links_output_exists'] = links_path.exists() and links_path.stat().st_size > 0 if links_path.exists() else False
+
+    # If item_scraped_count is missing but the file exists, approximate via file length
+    if stats['links_output_exists'] and 'item_scraped_count' not in stats:
+        try:
+            with links_path.open('r') as handle:
+                scraped_items = json.load(handle)
+            stats['item_scraped_count'] = len(scraped_items)
+            logger.info(f"Derived item count from links.json: {stats['item_scraped_count']}")
+        except Exception as exc:
+            logger.warning(f"Unable to derive item count from links.json: {exc}")
+
+    # Treat scraping as successful when we actually produced items
+    scraped_count = stats.get('item_scraped_count', 0)
+    stats['scrape_success'] = scraped_count > 0
+
+    if not stats['scrape_success'] and stats['links_output_exists']:
+        try:
+            with links_path.open('r') as handle:
+                scraped_items = json.load(handle)
+            scraped_count = len(scraped_items)
+            stats['item_scraped_count'] = scraped_count
+            stats['scrape_success'] = scraped_count > 0
+            logger.info(
+                "Verified scrape results from links.json: %s item(s) present", scraped_count
+            )
+        except Exception as exc:
+            logger.warning("Unable to verify links.json contents: %s", exc)
+
+    if not stats['scrape_success']:
+        logger.error("Scraping completed without producing any items.")
+
+    return stats
 
 def scrape_data() -> bool:
     """
@@ -269,7 +301,8 @@ def scrape_data_with_config(resume: bool = False, no_download: bool = False, all
 
 def download_data_with_config(input_file: str = 'latest.json', resume: bool = False, no_download: bool = False, 
                             all_versions: bool = False, organize_by_series: bool = False, 
-                            specific_release: int = None, threads: int = 5, verbose: bool = False) -> bool:
+                            specific_release: int = None, threads: int = 5, verbose: bool = False, 
+                            progress_callback=None) -> bool:
     """
     Enhanced download function with configuration options
     """
@@ -285,7 +318,7 @@ def download_data_with_config(input_file: str = 'latest.json', resume: bool = Fa
         
         dest_dir = 'downloads/By-Series' if organize_by_series else 'downloads/By-Release'
         
-        success = download_pdfs(input_file=input_file, dest_dir=dest_dir, concurrency=threads)
+        success = download_pdfs(input_file=input_file, dest_dir=dest_dir, concurrency=threads, callback=progress_callback)
         if success:
             logger.info("Download completed successfully")
             return True
@@ -344,8 +377,8 @@ def main(args):
                         ):
                             logger.info("Resume mode - Download completed successfully.")
                             # delete links and latest files
-                            Path('links.json').unlink(missing_ok=True)
-                            Path('latest.json').unlink(missing_ok=True)
+                            Path('downloads/links.json').unlink(missing_ok=True)
+                            Path('downloads/latest.json').unlink(missing_ok=True)
                             sys.exit(0)
                         else:
                             logger.error("Resume mode - Download failed.")
