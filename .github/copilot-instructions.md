@@ -21,3 +21,7 @@
 - **Scraper updates**: `tools/etsi_spider.py` drives Scrapy pipelines saved to JSON. Adjust `ITEM_PIPELINES` and `custom_settings` there rather than in the CLI.
 - **Code style**: Stick to Python 3.12 features, keep imports alphabetized locally, and respect existing logging, typing, and dotenv patterns.
 - **Copilot responses**: Always end with a concise summary of the actions performed and the current status or next steps.
+- **Chakra UI refactor**: Active work happens on `feature/chakra-ui-refactor` using a new React/Vite frontend in `frontend/` (Chakra UI + TypeScript). Leave the Mesop UI untouched in this branch.
+- **Frontend workflow**: Run `npm install` inside `frontend/`, start dev server with `npm run dev`, and build with `npm run build`. Artifact directories (`dist/`, `.vite/`) stay ignored.
+- **API layer**: REST endpoints for the new UI live under `src/api/` (`server.py`, `state_manager.py`). Keep FastAPI-style handlers stateless and thread-safe; persist cross-request data via `state_manager` helpers.
+- **Context hand-off**: Each session should confirm outstanding tasks for the Chakra rewrite (e.g., scaffolding components, wiring new endpoints) so the next environment can resume seamlessly.

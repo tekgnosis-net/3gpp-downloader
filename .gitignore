@@ -110,3 +110,7 @@ dmypy.json
 
 # Other folders and files
 unused*/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
