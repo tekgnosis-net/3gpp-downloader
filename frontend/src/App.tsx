@@ -979,6 +979,8 @@ function DownloadEvents({
 
 function App() {
   const { colorMode, toggleColorMode } = useColorMode()
+  const appVersion = import.meta.env.VITE_APP_VERSION ?? 'dev'
+  const currentYear = new Date().getFullYear()
   const [state, refresh] = useApiState()
   const [selected, setSelected] = useState<string[]>([])
   const [filters, setFilters] = useState<Filters>(() => {
@@ -1163,10 +1165,15 @@ function App() {
       <Stack spacing={6} maxW="1200px" mx="auto">
         <Flex align="center" gap={4}>
           <Box>
-            <Heading size="lg">3GPP Downloader Control Center</Heading>
-            <Text color="gray.500" fontSize="sm">
-              Orchestrate scraping, filtering, and downloads powered by FastAPI + Chakra UI
-            </Text>
+            <Stack spacing={1}>
+              <Heading size="lg">3GPP Downloader Control Center</Heading>
+              <Text color="gray.500" fontSize="xs">
+                Docker image version: {appVersion}
+              </Text>
+              <Text color="gray.500" fontSize="sm">
+                Orchestrate scraping, filtering, and downloads powered by FastAPI + Chakra UI
+              </Text>
+            </Stack>
           </Box>
           <Spacer />
           <Popover placement="bottom-end">
@@ -1325,6 +1332,9 @@ function App() {
           <Text>
             Backend last update: {new Date(state.last_update * 1000).toLocaleTimeString()} · Completed downloads: {state.completed_downloads.length} ·
             Failed downloads: {state.failed_downloads.length}
+          </Text>
+          <Text mt={2} fontSize="xs">
+            © {currentYear} Tekgnosis Pty Ltd
           </Text>
         </Box>
       </Stack>

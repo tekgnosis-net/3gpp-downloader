@@ -1,5 +1,21 @@
 # 3GPP Downloader Dockerfile
+
+ARG APP_VERSION=dev
+
+FROM node:20-bullseye AS frontend-builder
+ARG APP_VERSION
+ENV VITE_APP_VERSION=${APP_VERSION}
+WORKDIR /app/frontend
+
+# Install frontend dependencies and build the production bundle
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.12-slim
+
+ARG APP_VERSION=dev
 
 # Set working directory
 WORKDIR /app
@@ -21,12 +37,21 @@ COPY src/ ./src/
 COPY run_web.py .
 COPY README.md .
 
+# Copy the pre-built frontend bundle
+COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+
+# Annotate image with version metadata
+LABEL org.opencontainers.image.title="3gpp-downloader"
+LABEL org.opencontainers.image.version="${APP_VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/tekgnosis-net/3gpp-downloader"
+
 # Create directories for downloads and logs
 RUN mkdir -p downloads logs
 
 # Set environment variables
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
+ENV APP_VERSION=${APP_VERSION}
 
 # Expose port for web UI
 EXPOSE 32123
