@@ -1,3 +1,7 @@
+## <small>1.0.2 (2025-11-05)</small>
+
+* fix(ci): enable multi-arch publish builds ([4b7ed1a](https://github.com/tekgnosis-net/3gpp-downloader/commit/4b7ed1a))
+
 ## <small>1.0.1 (2025-11-05)</small>
 
 * fix(ci): enable multi-arch docker builds ([dd7caa7](https://github.com/tekgnosis-net/3gpp-downloader/commit/dd7caa7))
