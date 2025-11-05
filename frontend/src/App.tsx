@@ -980,6 +980,7 @@ function DownloadEvents({
 function App() {
   const { colorMode, toggleColorMode } = useColorMode()
   const appVersion = import.meta.env.VITE_APP_VERSION ?? 'dev'
+  const currentYear = new Date().getFullYear()
   const [state, refresh] = useApiState()
   const [selected, setSelected] = useState<string[]>([])
   const [filters, setFilters] = useState<Filters>(() => {
@@ -1331,6 +1332,9 @@ function App() {
           <Text>
             Backend last update: {new Date(state.last_update * 1000).toLocaleTimeString()} · Completed downloads: {state.completed_downloads.length} ·
             Failed downloads: {state.failed_downloads.length}
+          </Text>
+          <Text mt={2} fontSize="xs">
+            © {currentYear} Tekgnosis Pty Ltd
           </Text>
         </Box>
       </Stack>
