@@ -111,6 +111,17 @@ def create_card_style(elevation: str = "md", padding: int = Theme.SPACE_4) -> me
         border=me.Border.all(me.BorderSide(width=1, color=Theme.OUTLINE_VARIANT, style="solid")),
     )
 
+def create_gradient_card_style(primary: str, secondary: str) -> me.Style:
+    """Hero card style with gradient background for key insights"""
+    return me.Style(
+        background=f"linear-gradient(135deg, {primary}, {secondary})",
+        border_radius=Theme.RADIUS_LG,
+        padding=me.Padding.all(Theme.SPACE_4),
+        color="white",
+        box_shadow=Theme.SHADOW_LG,
+        border=me.Border.all(me.BorderSide(width=0))
+    )
+
 def create_button_style(variant: str = "primary", size: str = "md") -> me.Style:
     """Create a button style with consistent theming"""
     base_style = me.Style(
@@ -205,6 +216,10 @@ class AppState:
         self.current_page = 0
         self.show_download_confirmation = False
         self.last_update = 0  # timestamp for triggering re-renders
+        self.completed_downloads: List[str] = []
+        self.failed_downloads: List[str] = []
+        self.recent_download_events: List[Dict[str, str]] = []
+        self.current_download_item: Optional[str] = None
 
         # UI state
         self.show_advanced_settings = False
@@ -226,13 +241,7 @@ class AppState:
         self.error_recovery_options = []
 
         # Configuration options (equivalent to main.py arguments)
-        self.resume_downloads = False
-        self.no_download = False
-        self.download_all_versions = False
-        self.organize_by_series = False
-        
-        # Configuration options (equivalent to main.py arguments)
-        self.resume_downloads = False
+        self.resume_downloads = True
         self.no_download = False
         self.download_all_versions = False
         self.organize_by_series = False
@@ -263,12 +272,51 @@ class AppState:
         self.scrapy_download_delay = 0.1
         self.scrapy_concurrent_requests = 8
         self.etsi_min_release = 15
+
+        # UI help hint visibility
+        self.visible_hints: Dict[str, bool] = {}
         
         # Web UI settings
         self.web_max_log_messages = 100
         self.web_refresh_interval = 5
 
 app_state = AppState()
+
+
+def toggle_hint(key: str):
+    """Toggle the visibility of a contextual settings hint"""
+    app_state.visible_hints[key] = not app_state.visible_hints.get(key, False)
+    app_state.last_update = time.time()
+
+
+def settings_hint(key: str, message: str):
+    """Render an interactive help icon with contextual guidance"""
+    is_visible = app_state.visible_hints.get(key, False)
+    with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_1)):
+        with me.box(
+            style=me.Style(
+                cursor="pointer",
+                display="flex",
+                align_items="center",
+                justify_content="center"
+            ),
+            on_click=lambda e, hint_key=key: toggle_hint(hint_key)
+        ):
+            me.icon("help" if is_visible else "help_outline", style=me.Style(
+                color=Theme.PRIMARY if is_visible else Theme.ON_SURFACE_VARIANT,
+                font_size=16
+            ))
+
+        if is_visible:
+            me.text(message, style=me.Style(
+                font_size=Theme.FONT_SIZE_CAPTION,
+                color=Theme.ON_SURFACE_VARIANT,
+                background=Theme.SURFACE_VARIANT,
+                padding=me.Padding.symmetric(horizontal=Theme.SPACE_2, vertical=4),
+                border_radius=Theme.RADIUS_MD,
+                max_width="280px",
+                line_height=1.4
+            ))
 
 def save_settings():
     """Save current settings to a JSON file"""
@@ -317,7 +365,7 @@ def load_settings():
                 settings_data = json.load(f)
             
             # Load download options
-            app_state.resume_downloads = settings_data.get("resume_downloads", False)
+            app_state.resume_downloads = settings_data.get("resume_downloads", True)
             app_state.no_download = settings_data.get("no_download", False)
             app_state.download_all_versions = settings_data.get("download_all_versions", False)
             app_state.organize_by_series = settings_data.get("organize_by_series", False)
@@ -351,9 +399,77 @@ def add_log_message(message: str):
     """Add a message to the log"""
     timestamp = time.strftime("%H:%M:%S")
     app_state.log_messages.append(f"[{timestamp}] {message}")
-    # Keep only last 100 messages
-    if len(app_state.log_messages) > 100:
-        app_state.log_messages = app_state.log_messages[-100:]
+    max_entries = max(1, getattr(app_state, "web_max_log_messages", 100))
+    if len(app_state.log_messages) > max_entries:
+        app_state.log_messages = app_state.log_messages[-max_entries:]
+    app_state.last_update = time.time()
+
+
+class UILogHandler(logging.Handler):
+    """Route Python logging output into the in-app activity log."""
+
+    def __init__(self, level: int = logging.INFO):
+        super().__init__(level)
+        self.setFormatter(logging.Formatter("[%(name)s][%(levelname)s] %(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = self.format(record)
+        except Exception:
+            message = record.getMessage()
+
+        for line in message.splitlines():
+            try:
+                add_log_message(line)
+            except Exception:
+                self.handleError(record)
+                break
+
+
+ui_log_handler = UILogHandler()
+
+_TRACKED_LOGGER_NAMES = {
+    logger_name,
+    os.getenv('MAIN_LOGGER_NAME', 'downloader'),
+    os.getenv('JSON_DOWNLOADER_LOGGER_NAME', 'json_downloader'),
+    os.getenv('ETSI_SPIDER_LOGGER_NAME', 'etsi_spider'),
+}
+
+
+def _ensure_ui_handler(target_logger: logging.Logger) -> None:
+    if target_logger and ui_log_handler not in target_logger.handlers:
+        target_logger.addHandler(ui_log_handler)
+
+
+def configure_logging_preferences() -> None:
+    """Align Python logging output with the web UI visibility preferences."""
+    level = logging.DEBUG if app_state.verbose_logging else logging.INFO
+    ui_log_handler.setLevel(level)
+
+    for name in _TRACKED_LOGGER_NAMES:
+        if not name:
+            continue
+        target_logger = logging.getLogger(name)
+        target_logger.setLevel(level)
+        _ensure_ui_handler(target_logger)
+
+    scrapy_logger = logging.getLogger("scrapy")
+    scrapy_logger.setLevel(logging.INFO if app_state.verbose_logging else logging.WARNING)
+    _ensure_ui_handler(scrapy_logger)
+
+    web_logger.info("Verbose logging enabled" if app_state.verbose_logging else "Verbose logging disabled")
+
+def record_download_event(filename: str, status: str, description: str):
+    """Track noteworthy download events for dashboard insights"""
+    timestamp = time.strftime("%H:%M:%S")
+    app_state.recent_download_events.append({
+        "timestamp": timestamp,
+        "filename": filename,
+        "status": status,
+        "description": description
+    })
+    if len(app_state.recent_download_events) > 12:
+        app_state.recent_download_events = app_state.recent_download_events[-12:]
 
 def show_completion_notification(message: str):
     """Show a completion notification"""
@@ -389,6 +505,7 @@ def retry_last_operation(e: me.ClickEvent):
 def update_scraping_progress(progress: float, message: str = ""):
     """Update scraping progress"""
     app_state.scraping_progress = progress
+    app_state.last_update = time.time()  # Trigger UI re-render
     if message:
         app_state.current_operation = message
         add_log_message(message)
@@ -411,23 +528,72 @@ def update_download_progress(progress: float, message: str = ""):
         app_state.download_status = "completed"
 
 def download_progress_callback(filename: str, status: str, percent: float):
-    """Callback for individual file download progress"""
-    # Track overall progress
-    if not hasattr(download_progress_callback, 'total_files'):
-        # Initialize tracking variables on first call
-        download_progress_callback.total_files = len(app_state.selected_files)
+    """Handle download progress events emitted by the async downloader"""
+    # Ensure tracking attributes exist once per batch
+    if not getattr(download_progress_callback, "initialized", False):
+        total = len(app_state.selected_files) or 1
+        download_progress_callback.total_files = total
         download_progress_callback.completed_files = 0
-    
-    if status == "completed":
+        download_progress_callback.error_files = 0
+        download_progress_callback.initialized = True
+
+    if status == "starting":
+        app_state.current_download_item = filename
+        app_state.current_operation = f"Starting download: {filename}"
+        app_state.last_update = time.time()
+        record_download_event(filename, "Queued", "Preparing download")
+    elif status == "file_progress":
+        app_state.current_download_item = filename
+        app_state.current_operation = f"Downloading {filename} ({percent:.0f}%)"
+        app_state.last_update = time.time()
+    elif status == "file_complete":
         download_progress_callback.completed_files += 1
-        # Calculate overall progress: 10% initialization + 80% download + 10% finalization
-        base_progress = 10  # Already set during initialization
-        download_progress = (download_progress_callback.completed_files / download_progress_callback.total_files) * 80
-        total_progress = base_progress + download_progress
-        update_download_progress(min(90, total_progress), f"Downloaded {download_progress_callback.completed_files}/{download_progress_callback.total_files} files")
+        app_state.completed_downloads.append(filename)
+        app_state.completed_downloads = app_state.completed_downloads[-15:]
+        record_download_event(filename, "Completed", "Saved to downloads")
+        add_log_message(f"Finished downloading {filename}")
     elif status == "error":
+        download_progress_callback.error_files += 1
+        app_state.failed_downloads.append(filename)
+        app_state.failed_downloads = app_state.failed_downloads[-15:]
+        record_download_event(filename, "Failed", "See logs for details")
         add_log_message(f"Error downloading {filename}")
-    # For individual file progress, we could show it but for now we aggregate
+        app_state.download_status = "error"
+        app_state.current_operation = f"Error downloading {filename}"
+        app_state.last_update = time.time()
+    elif status == "overall_progress":
+        # Map overall downloader percent (0-100) into reserved 80% window (10-90)
+        download_window = max(0.0, min(100.0, percent))
+        scaled_progress = 10 + (download_window * 0.8)
+        completed = download_progress_callback.completed_files
+        total = download_progress_callback.total_files
+        errors = download_progress_callback.error_files
+        status_message = f"Downloaded {completed}/{total} files"
+        if errors:
+            status_message += f" (errors: {errors})"
+        update_download_progress(min(90, scaled_progress), status_message)
+    elif status == "all_finished":
+        if download_progress_callback.error_files:
+            update_download_progress(90, f"Completed with {download_progress_callback.error_files} error(s)")
+        else:
+            update_download_progress(90, "Download processing complete")
+        record_download_event("Batch", "All Files", "Download batch finished")
+        app_state.current_download_item = None
+    elif status == "errors":
+        # Final error count communicated after completion
+        error_count = int(percent)
+        download_progress_callback.error_files = error_count
+        if error_count:
+            record_download_event("Batch", "Issues Detected", f"{error_count} file{'s' if error_count != 1 else ''} failed")
+            show_error_notification(
+                "Downloads completed with errors",
+                f"{error_count} file{'s' if error_count != 1 else ''} failed to download.",
+                [
+                    "Check your network connection",
+                    "Verify the source URLs are still valid",
+                    "Review the logs tab for detailed error messages"
+                ]
+            )
         selected_count = len(app_state.selected_files)
         show_completion_notification(f"Download completed successfully! {selected_count} file{'s' if selected_count != 1 else ''} downloaded.")
 
@@ -800,7 +966,10 @@ def toggle_organize_by_series(e: me.CheckboxChangeEvent):
 
 def toggle_verbose_logging(e: me.CheckboxChangeEvent):
     """Toggle verbose logging setting"""
+    if app_state.verbose_logging == e.checked:
+        return
     app_state.verbose_logging = e.checked
+    configure_logging_preferences()
     save_settings()
 
 def toggle_advanced_settings(e: me.CheckboxChangeEvent):
@@ -946,14 +1115,35 @@ def welcome_screen():
                     ))
         
         # Action button
+        start_button_style = create_button_style("primary", "lg")
+        if app_state.scraping_status == "running" or app_state.download_status == "running":
+            start_button_style.opacity = 0.6
+            start_button_style.cursor = "not-allowed"
+
         me.button(
             "🚀 Start Scraping",
             on_click=start_scraping,
             disabled=int(app_state.scraping_status == "running" or app_state.download_status == "running"),
-            style=create_button_style("primary", "lg") if not (app_state.scraping_status == "running" or app_state.download_status == "running") else create_button_style("primary", "lg").update(
-                opacity=0.6, cursor="not-allowed"
-            )
+            style=start_button_style
         )
+
+        # Show live status feedback even before files are discovered
+        if app_state.scraping_status != "idle" or app_state.download_status != "idle":
+            with me.box(style=me.Style(
+                margin=me.Margin(top=Theme.SPACE_5),
+                width="100%",
+                max_width="640px",
+                display="flex",
+                flex_direction="column",
+                gap=Theme.SPACE_3
+            )):
+                if app_state.scraping_status != "idle":
+                    with me.box(style=create_card_style("md")):
+                        status_card("Scraping", app_state.scraping_status, app_state.scraping_progress, "web")
+
+                if app_state.download_status != "idle":
+                    with me.box(style=create_card_style("md")):
+                        status_card("Download", app_state.download_status, app_state.download_progress, "download", app_state.last_update)
 
 def dashboard_content():
     """Dashboard tab content with modern design"""
@@ -982,6 +1172,15 @@ def dashboard_content():
         # Files overview card
         with me.box(style=create_card_style("md")):
             files_overview_card()
+
+    with me.box(style=me.Style(
+        display="grid",
+        grid_template_columns="repeat(auto-fit, minmax(320px, 1fr))",
+        gap=Theme.SPACE_4,
+        margin=me.Margin(bottom=Theme.SPACE_5)
+    )):
+        download_insights_card()
+        recent_download_activity_card()
 
     # Help section
     with me.box(style=create_card_style("md", Theme.SPACE_4)):
@@ -1151,6 +1350,40 @@ def dashboard_content():
                 color=Theme.ON_SURFACE
             ))
 
+            filtered_files = get_filtered_files()
+            selected_count = len(app_state.selected_files)
+
+            with me.box(style=me.Style(
+                display="flex",
+                justify_content="space-between",
+                align_items="center",
+                flex_wrap="wrap",
+                gap=Theme.SPACE_3,
+                margin=me.Margin(bottom=Theme.SPACE_3)
+            )):
+                me.text(
+                    f"Selected {selected_count} of {len(filtered_files)} visible file{'s' if len(filtered_files) != 1 else ''}",
+                    style=me.Style(font_size=Theme.FONT_SIZE_BODY, color=Theme.ON_SURFACE_VARIANT)
+                )
+
+                download_button_style = create_button_style("accent", "md")
+                disable_download = app_state.download_status == "running" or selected_count == 0
+                if disable_download:
+                    download_button_style.opacity = 0.6
+                    download_button_style.cursor = "not-allowed"
+
+                me.button(
+                    "⬇️ Start Download",
+                    on_click=start_download,
+                    disabled=int(disable_download),
+                    style=download_button_style
+                )
+                if disable_download:
+                    me.text(
+                        "Select at least one specification to enable downloads.",
+                        style=me.Style(font_size=Theme.FONT_SIZE_CAPTION, color=Theme.ON_SURFACE_VARIANT)
+                    )
+
             # Smart selection controls
             with me.box(style=me.Style(display="flex", align_items="center", gap=Theme.SPACE_3, margin=me.Margin(bottom=Theme.SPACE_3), flex_wrap="wrap")):
                 # Search box
@@ -1194,7 +1427,6 @@ def dashboard_content():
                     )
 
             # Filtered results summary
-            filtered_files = get_filtered_files()
             me.text(f"Showing {len(filtered_files)} of {len(app_state.available_files)} files", style=me.Style(
                 font_size=Theme.FONT_SIZE_BODY,
                 color=Theme.ON_SURFACE_VARIANT,
@@ -1344,7 +1576,10 @@ def status_card(title: str, status: str, progress: float, icon: str, update_time
                         align_items="center",
                         margin=me.Margin(top=Theme.SPACE_1)
                     )):
-                        me.text("Download in progress...", style=me.Style(
+                        primary_status_text = (
+                            f"{progress:.0f}% complete" if progress > 0 else f"{title} in progress..."
+                        )
+                        me.text(primary_status_text, style=me.Style(
                             font_size=Theme.FONT_SIZE_CAPTION,
                             color=Theme.ON_SURFACE_VARIANT
                         ))
@@ -1420,6 +1655,136 @@ def files_overview_card():
                     color=Theme.PRIMARY,
                     font_weight=Theme.FONT_WEIGHT_MEDIUM
                 ))
+
+def download_insights_card():
+    """Show live download statistics with a modern hero card"""
+    total_selected = len(app_state.selected_files)
+    completed = len(app_state.completed_downloads)
+    failed = len(app_state.failed_downloads)
+    remaining = max(total_selected - completed - failed, 0)
+    running = app_state.download_status == "running"
+
+    with me.box(style=create_gradient_card_style(Theme.PRIMARY, Theme.PRIMARY_DARK)):
+        me.text("Live Download Insights", style=me.Style(
+            font_size=Theme.FONT_SIZE_H4,
+            font_weight=Theme.FONT_WEIGHT_BOLD,
+            color="white",
+            margin=me.Margin(bottom=Theme.SPACE_3)
+        ))
+
+        with me.box(style=me.Style(
+            display="grid",
+            grid_template_columns="repeat(auto-fit, minmax(120px, 1fr))",
+            gap=Theme.SPACE_3,
+            margin=me.Margin(bottom=Theme.SPACE_3)
+        )):
+            metric_items = [
+                ("Selected", total_selected, "playlist_add_check", "rgba(255,255,255,0.18)"),
+                ("Completed", completed, "check_circle", "rgba(46,204,113,0.25)"),
+                ("Errors", failed, "error", "rgba(231,76,60,0.25)"),
+                ("Remaining", remaining if running else max(total_selected - completed, 0), "hourglass_empty", "rgba(255,255,255,0.18)")
+            ]
+            for label, value, icon_name, background in metric_items:
+                with me.box(style=me.Style(
+                    background=background,
+                    border_radius=Theme.RADIUS_MD,
+                    padding=me.Padding.all(Theme.SPACE_3),
+                    display="flex",
+                    flex_direction="column",
+                    gap=Theme.SPACE_1
+                )):
+                    me.icon(icon_name, style=me.Style(color="white", font_size=20))
+                    me.text(str(value), style=me.Style(
+                        font_size=Theme.FONT_SIZE_H3,
+                        font_weight=Theme.FONT_WEIGHT_BOLD,
+                        color="white"
+                    ))
+                    me.text(label, style=me.Style(
+                        font_size=Theme.FONT_SIZE_CAPTION,
+                        text_transform="uppercase",
+                        letter_spacing="0.08em",
+                        color="rgba(255,255,255,0.85)"
+                    ))
+
+        detail_lines = []
+        if running and app_state.current_download_item:
+            detail_lines.append(f"Now downloading: {app_state.current_download_item}")
+        if completed:
+            detail_lines.append(f"Last completed: {app_state.completed_downloads[-1]}")
+        if failed:
+            detail_lines.append(f"Issues detected: {failed} file{'s' if failed != 1 else ''}")
+        if not detail_lines:
+            detail_lines.append("No downloads in progress yet")
+
+        with me.box(style=me.Style(display="flex", flex_direction="column", gap=Theme.SPACE_1)):
+            for line in detail_lines[:3]:
+                me.text(line, style=me.Style(
+                    font_size=Theme.FONT_SIZE_BODY,
+                    color="rgba(255,255,255,0.85)"
+                ))
+
+def recent_download_activity_card():
+    """Timeline of recent download activity"""
+    events = list(app_state.recent_download_events)[-6:]
+    events = list(reversed(events))
+
+    status_styles = {
+        "Queued": (Theme.INFO, "schedule"),
+        "Completed": (Theme.SUCCESS, "check_circle"),
+        "Failed": (Theme.ERROR, "error"),
+        "All Files": (Theme.PRIMARY, "inventory"),
+        "Issues Detected": (Theme.WARNING, "report_problem"),
+    }
+
+    with me.box(style=create_card_style("md", Theme.SPACE_4)):
+        me.text("Recent Activity", style=me.Style(
+            font_size=Theme.FONT_SIZE_H4,
+            font_weight=Theme.FONT_WEIGHT_BOLD,
+            color=Theme.ON_SURFACE,
+            margin=me.Margin(bottom=Theme.SPACE_3)
+        ))
+
+        if not events:
+            me.text("No download activity yet", style=me.Style(
+                font_size=Theme.FONT_SIZE_BODY,
+                color=Theme.ON_SURFACE_VARIANT,
+                font_style="italic"
+            ))
+            return
+
+        for event in events:
+            status_color, status_icon = status_styles.get(event["status"], (Theme.PRIMARY, "info"))
+            with me.box(style=me.Style(
+                display="flex",
+                align_items="flex-start",
+                gap=Theme.SPACE_3,
+                padding=me.Padding.symmetric(vertical=Theme.SPACE_2)
+            )):
+                with me.box(style=me.Style(
+                    width=36,
+                    height=36,
+                    border_radius="50%",
+                    background=status_color + "1A",
+                    display="flex",
+                    align_items="center",
+                    justify_content="center"
+                )):
+                    me.icon(status_icon, style=me.Style(color=status_color, font_size=18))
+
+                with me.box(style=me.Style(flex_grow=1)):
+                    me.text(event["description"], style=me.Style(
+                        font_size=Theme.FONT_SIZE_BODY,
+                        color=Theme.ON_SURFACE,
+                        font_weight=Theme.FONT_WEIGHT_MEDIUM
+                    ))
+                    me.text(event["filename"], style=me.Style(
+                        font_size=Theme.FONT_SIZE_CAPTION,
+                        color=Theme.ON_SURFACE_VARIANT
+                    ))
+                    me.text(event["timestamp"], style=me.Style(
+                        font_size=Theme.FONT_SIZE_CAPTION,
+                        color=Theme.OUTLINE
+                    ))
 
 def workflow_status():
     """Display current workflow status and next steps"""
@@ -1544,17 +1909,18 @@ def action_buttons():
                 )
             else:
                 # Render as styled box for informational buttons
-                with me.box(style=me.Style(
-                    **base_style,
-                    display="flex",
-                    align_items="center",
-                    justify_content="center",
-                    padding=me.Padding.symmetric(horizontal=Theme.SPACE_3, vertical=Theme.SPACE_2),
-                    border_radius=Theme.RADIUS_MD,
-                    cursor="default"
-                )):
+                info_style = create_button_style(variant, "md")
+                info_style.opacity = base_style.opacity
+                info_style.cursor = "default"
+                info_style.display = "flex"
+                info_style.align_items = "center"
+                info_style.justify_content = "center"
+                info_style.padding = me.Padding.symmetric(horizontal=Theme.SPACE_3, vertical=Theme.SPACE_2)
+                info_style.border_radius = Theme.RADIUS_MD
+
+                with me.box(style=info_style):
                     me.text(label, style=me.Style(
-                        font_size=Theme.FONT_SIZE_BUTTON,
+                        font_size=getattr(base_style, "font_size", Theme.FONT_SIZE_BODY),
                         font_weight=Theme.FONT_WEIGHT_MEDIUM,
                         color=Theme.ON_PRIMARY if variant == "primary" else Theme.ON_SURFACE
                     ))
@@ -1861,20 +2227,29 @@ def start_scraping(e: me.ClickEvent):
 
     app_state.scraping_status = "running"
     app_state.scraping_progress = 0
+    app_state.last_update = time.time()
     
     if app_state.resume_downloads:
-        add_log_message("Resume mode: checking for existing files...")
+        update_scraping_progress(30, "Resume mode: preparing cached files...")
     else:
-        add_log_message("Starting scraping process...")
+        update_scraping_progress(12, "Starting scraper – discovering ETSI specifications (this may take time)...")
+
+    def scraping_progress_pulse():
+        """Keep scraping progress responsive during long operations"""
+        local_progress = max(app_state.scraping_progress, 12)
+        while app_state.scraping_status == "running":
+            time.sleep(2.0)
+            if app_state.scraping_status != "running":
+                break
+            # Ease progress toward 85% while the spider runs
+            local_progress = min(85.0, max(local_progress + 3.0, app_state.scraping_progress))
+            update_scraping_progress(local_progress)
+
+    threading.Thread(target=scraping_progress_pulse, daemon=True).start()
 
     # Run scraping in background thread
     def run_scraping():
         try:
-            if app_state.resume_downloads:
-                update_scraping_progress(50, "Checking for existing files...")
-            else:
-                update_scraping_progress(10, "Initializing scraper...")
-                
             success = scrape_data_with_config(
                 resume=app_state.resume_downloads,
                 no_download=app_state.no_download,
@@ -1885,18 +2260,26 @@ def start_scraping(e: me.ClickEvent):
                 verbose=app_state.verbose_logging
             )
             if success:
-                app_state.scraping_status = "completed"
                 if app_state.resume_downloads:
-                    update_scraping_progress(100, "Resume check completed - files loaded")
+                    update_scraping_progress(88, "Resume check complete – refreshing cached files...")
                 else:
-                    update_scraping_progress(100, "Scraping completed successfully")
+                    update_scraping_progress(88, "Processing scraped results...")
+
                 load_available_files()
+
+                discovered = len(app_state.available_files)
+                summary_message = (
+                    f"Scraping completed successfully ({discovered} file{'s' if discovered != 1 else ''} discovered)"
+                    if discovered
+                    else "Scraping completed but no files were discovered"
+                )
+                update_scraping_progress(100, summary_message)
             else:
                 app_state.scraping_status = "error"
-                update_scraping_progress(0, "Scraping failed")
+                update_scraping_progress(app_state.scraping_progress, "Scraping failed")
         except Exception as ex:
             app_state.scraping_status = "error"
-            update_scraping_progress(0, f"Scraping error: {str(ex)}")
+            update_scraping_progress(app_state.scraping_progress, f"Scraping error: {str(ex)}")
             show_error_notification(
                 "Scraping Failed",
                 str(ex),
@@ -1922,14 +2305,49 @@ def filter_versions(e: me.ClickEvent):
 
     add_log_message("Filtering to latest versions...")
 
+    source_path = None
+    for candidate in [Path('downloads/links.json'), Path('links.json')]:
+        if candidate.exists():
+            source_path = candidate
+            break
+
+    if not source_path:
+        message = "Cannot find links.json to filter. Run scraping first or place links.json in the downloads folder."
+        add_log_message(message)
+        show_error_notification(
+            "Filtering Unavailable",
+            message,
+            [
+                "Run Start Scraping to generate downloads/links.json",
+                "Copy an existing links.json into the downloads folder",
+                "Turn on 'Download all versions' if you prefer to skip filtering"
+            ]
+        )
+        return
+
+    output_path = Path('downloads/latest.json')
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    app_state.current_operation = "Filtering to latest versions..."
+    app_state.last_update = time.time()
+
     def run_filtering():
         try:
-            success = filter_latest_versions(input_file='downloads/links.json', output_file='downloads/latest.json')
+            success = filter_latest_versions(input_file=str(source_path), output_file=str(output_path))
             if success:
-                add_log_message("Version filtering completed")
+                app_state.current_operation = "Latest versions ready"
+                add_log_message(f"Version filtering completed ({output_path})")
                 load_available_files()
             else:
                 add_log_message("Version filtering failed")
+                show_error_notification(
+                    "Filtering Failed",
+                    "No valid specifications were produced. Check logs for details.",
+                    [
+                        "Confirm downloads/links.json contains valid specification entries",
+                        "Try scraping again to regenerate the source data"
+                    ]
+                )
         except Exception as ex:
             add_log_message(f"Filtering error: {str(ex)}")
             show_error_notification(
@@ -1985,6 +2403,15 @@ def confirm_download(e: me.ClickEvent):
         delattr(download_progress_callback, 'total_files')
     if hasattr(download_progress_callback, 'completed_files'):
         delattr(download_progress_callback, 'completed_files')
+    if hasattr(download_progress_callback, 'error_files'):
+        delattr(download_progress_callback, 'error_files')
+    if hasattr(download_progress_callback, 'initialized'):
+        delattr(download_progress_callback, 'initialized')
+
+    app_state.completed_downloads.clear()
+    app_state.failed_downloads.clear()
+    app_state.recent_download_events.clear()
+    app_state.current_download_item = None
 
     # Run download in background thread
     def run_download():
@@ -1996,7 +2423,7 @@ def confirm_download(e: me.ClickEvent):
             with open('selected.json', 'w') as f:
                 json.dump(filtered_data, f, indent=2)
 
-            update_download_progress(50, f"Downloading {len(selected_urls)} files...")
+            update_download_progress(12, f"Queued {len(selected_urls)} files for download")
             
             success = download_data_with_config(
                 input_file='selected.json',
@@ -2015,11 +2442,11 @@ def confirm_download(e: me.ClickEvent):
                 update_download_progress(100, "All downloads completed successfully")
             else:
                 app_state.download_status = "error"
-                update_download_progress(0, "Download failed")
+                update_download_progress(app_state.download_progress, "Download failed")
 
         except Exception as ex:
             app_state.download_status = "error"
-            update_download_progress(0, f"Download error: {str(ex)}")
+            update_download_progress(app_state.download_progress, f"Download error: {str(ex)}")
             show_error_notification(
                 "Download Failed",
                 str(ex),
@@ -2220,3 +2647,4 @@ def change_page(new_page: int):
 # Initialize available files and settings on startup
 load_available_files()
 load_settings()
+configure_logging_preferences()
