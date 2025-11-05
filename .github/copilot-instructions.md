@@ -7,6 +7,8 @@
 - **Change tracking**: Document structural, dependency, and workflow updates here; perform work on feature branches rather than directly on `main`.
 - **Workflow vigilance**: If CI/CD or automation files change, monitor subsequent runs and surface failures quickly.
 - **Branch etiquette**: Maintain feature branches per change; never revert user edits unless explicitly requested.
+- **UI baseline**: Display the running build/version near the primary title (pulling from an env-driven constant such as `VITE_APP_VERSION`) and include a footer with `© {currentYear} Tekgnosis Pty Ltd`, computing the year at runtime so it stays current.
+- **Docker build args**: Plumb an `APP_VERSION` build arg/ENV through container builds so the frontend/banner and metadata stay synchronized with release tags.
 
 ## Release & versioning
 
