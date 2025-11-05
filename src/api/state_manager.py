@@ -1,7 +1,6 @@
 """Shared state management for the FastAPI backend.
 
-This module replaces the previous Mesop-driven AppState implementation
-with a threadsafe manager that can be consumed by API endpoints and
+Provides a threadsafe manager that can be consumed by API endpoints and
 background workers. It stores runtime telemetry (progress, statuses,
 logs, file listings) as well as persisted user settings that mirror the
 legacy experience.
@@ -16,6 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
+from datetime import datetime, timezone
 
 _SETTINGS_PATH = Path("web_settings.json")
 
@@ -160,7 +160,7 @@ class StateManager:
 
     def record_download_event(self, filename: str, status: str, description: str) -> None:
         event = DownloadEvent(
-            timestamp=time.strftime("%H:%M:%S"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             filename=filename,
             status=status,
             description=description,
@@ -254,3 +254,4 @@ class StateManager:
 
 
 state_manager = StateManager()
+state_manager.load_settings()
