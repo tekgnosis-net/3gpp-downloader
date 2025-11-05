@@ -34,6 +34,15 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Set up QEMU for emulation
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+          driver: docker-container
+
       - name: Run semantic-release
         id: semantic
         uses: cycjimmy/semantic-release-action@v4
