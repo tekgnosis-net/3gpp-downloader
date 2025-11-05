@@ -1,3 +1,9 @@
+## <small>1.0.3 (2025-11-05)</small>
+
+* Merge branch 'fix/chakra-ui-entrypoint' ([b5f6660](https://github.com/tekgnosis-net/3gpp-downloader/commit/b5f6660))
+* fix(api): serve chakra frontend via fastapi ([d5a0c15](https://github.com/tekgnosis-net/3gpp-downloader/commit/d5a0c15))
+* chore: ignore copilot instructions ([03b11a8](https://github.com/tekgnosis-net/3gpp-downloader/commit/03b11a8))
+
 ## <small>1.0.2 (2025-11-05)</small>
 
 * fix(ci): enable multi-arch publish builds ([4b7ed1a](https://github.com/tekgnosis-net/3gpp-downloader/commit/4b7ed1a))
