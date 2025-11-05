@@ -71,6 +71,12 @@ npm run dev -- --host 0.0.0.0 --port 5173
 
 - API base URL default: `http://localhost:32123/api` (override via `VITE_API_BASE_URL`).
 
+## Development
+
+- Start work by branching from `main` (or the active integration branch such as `feature/chakra-ui-refactor`) and naming the branch after the change (for example, `feature/ui-progress-bar`).
+- Never push directly to `main`; open a pull request from your feature branch instead so reviews and CI can run before merges.
+- Keep commits focused and include verification steps (e.g., `python -m pytest`, `npm run build`) in your PR description to document test coverage.
+
 ## Workflows
 
 ### Web dashboard
@@ -153,7 +159,7 @@ docker compose logs -f
 
 ## Contributing
 
-1. Branch from `feature/chakra-ui-refactor`.
+1. Create a feature branch from `main` (or from `feature/chakra-ui-refactor` if continuing this refactor) before making changes.
 2. Run backend + frontend checks (`python -m pytest`, `npm run lint`).
 3. Cover new API/UI behaviour with tests or manual verification steps.
 4. Submit a PR summarising changes and test evidence.
