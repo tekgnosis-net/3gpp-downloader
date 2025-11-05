@@ -1,3 +1,7 @@
+## <small>1.0.1 (2025-11-05)</small>
+
+* fix(ci): enable multi-arch docker builds ([dd7caa7](https://github.com/tekgnosis-net/3gpp-downloader/commit/dd7caa7))
+
 ## 1.0.0 (2025-11-05)
 
 * fix: align chakra stack with react 18 ([f0bcf0b](https://github.com/tekgnosis-net/3gpp-downloader/commit/f0bcf0b))
