@@ -30,7 +30,15 @@ jobs:
           pip install pytest
 
       - name: Run pytest
-        run: python -m pytest
+        run: |
+          set +e
+          python -m pytest
+          status=$?
+          if [ "$status" -eq 5 ]; then
+            echo "Pytest exited with code 5 (no tests collected); treating as success."
+            exit 0
+          fi
+          exit "$status"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
