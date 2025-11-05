@@ -979,6 +979,7 @@ function DownloadEvents({
 
 function App() {
   const { colorMode, toggleColorMode } = useColorMode()
+  const appVersion = import.meta.env.VITE_APP_VERSION ?? 'dev'
   const [state, refresh] = useApiState()
   const [selected, setSelected] = useState<string[]>([])
   const [filters, setFilters] = useState<Filters>(() => {
@@ -1163,10 +1164,15 @@ function App() {
       <Stack spacing={6} maxW="1200px" mx="auto">
         <Flex align="center" gap={4}>
           <Box>
-            <Heading size="lg">3GPP Downloader Control Center</Heading>
-            <Text color="gray.500" fontSize="sm">
-              Orchestrate scraping, filtering, and downloads powered by FastAPI + Chakra UI
-            </Text>
+            <Stack spacing={1}>
+              <Heading size="lg">3GPP Downloader Control Center</Heading>
+              <Text color="gray.500" fontSize="xs">
+                Docker image version: {appVersion}
+              </Text>
+              <Text color="gray.500" fontSize="sm">
+                Orchestrate scraping, filtering, and downloads powered by FastAPI + Chakra UI
+              </Text>
+            </Stack>
           </Box>
           <Spacer />
           <Popover placement="bottom-end">

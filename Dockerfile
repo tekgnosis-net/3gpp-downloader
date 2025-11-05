@@ -1,6 +1,10 @@
 # 3GPP Downloader Dockerfile
 
+ARG APP_VERSION=dev
+
 FROM node:20-bullseye AS frontend-builder
+ARG APP_VERSION
+ENV VITE_APP_VERSION=${APP_VERSION}
 WORKDIR /app/frontend
 
 # Install frontend dependencies and build the production bundle
