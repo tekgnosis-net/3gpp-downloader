@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -27,6 +29,9 @@ from .state_manager import state_manager
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="3GPP Downloader API", version="1.0.0")
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+FRONTEND_DIST = Path(os.getenv("FRONTEND_DIST", ROOT_DIR / "frontend" / "dist")).resolve()
 
 # Allow local dev front-ends by default; production deployments should
 # override with env vars.
@@ -389,3 +394,30 @@ def clear_logs() -> Dict[str, str]:
     state_manager.log_messages = []
     state_manager.add_log("Logs cleared")
     return {"message": "Logs cleared"}
+
+
+if FRONTEND_DIST.exists():
+    index_path = FRONTEND_DIST / "index.html"
+    if not index_path.exists():
+        logger.warning("Frontend dist directory %s is missing index.html", FRONTEND_DIST)
+    else:
+        logger.info("Serving frontend assets from %s", FRONTEND_DIST)
+
+    @app.get("/", include_in_schema=False)
+    async def serve_index() -> FileResponse:  # type: ignore[return-value]
+        return FileResponse(index_path)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str) -> FileResponse:  # type: ignore[return-value]
+        candidate = FRONTEND_DIST / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index_path)
+
+    app.mount(
+        "/assets",
+        StaticFiles(directory=FRONTEND_DIST / "assets" if (FRONTEND_DIST / "assets").exists() else FRONTEND_DIST),
+        name="assets",
+    )
+else:
+    logger.warning("Frontend dist directory %s not found; API will run without static assets", FRONTEND_DIST)
