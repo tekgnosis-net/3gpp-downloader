@@ -1,3 +1,7 @@
+## <small>1.1.1 (2025-11-06)</small>
+
+* fix: remove manual chunk splitting ([169afb1](https://github.com/tekgnosis-net/3gpp-downloader/commit/169afb1))
+
 ## 1.1.0 (2025-11-06)
 
 * Merge pull request #1 from tekgnosis-net/feature/download-stop-version-sync ([bf4a949](https://github.com/tekgnosis-net/3gpp-downloader/commit/bf4a949)), closes [#1](https://github.com/tekgnosis-net/3gpp-downloader/issues/1)
