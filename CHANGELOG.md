@@ -1,3 +1,8 @@
+## 1.1.0 (2025-11-06)
+
+* Merge pull request #1 from tekgnosis-net/feature/download-stop-version-sync ([bf4a949](https://github.com/tekgnosis-net/3gpp-downloader/commit/bf4a949)), closes [#1](https://github.com/tekgnosis-net/3gpp-downloader/issues/1)
+* feat: add download cancellation and version telemetry ([81e4ebd](https://github.com/tekgnosis-net/3gpp-downloader/commit/81e4ebd))
+
 ## <small>1.0.3 (2025-11-05)</small>
 
 * Merge branch 'fix/chakra-ui-entrypoint' ([b5f6660](https://github.com/tekgnosis-net/3gpp-downloader/commit/b5f6660))
