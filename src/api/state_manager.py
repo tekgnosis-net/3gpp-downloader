@@ -8,6 +8,7 @@ legacy experience.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from dataclasses import dataclass, field, asdict
@@ -82,6 +83,7 @@ class StateManager:
         self.failed_downloads: List[str] = []
         self.recent_download_events: List[DownloadEvent] = []
         self.last_update = time.time()
+        self.app_version = os.getenv("APP_VERSION", "dev")
 
     # ------------------------------------------------------------------
     # Persistence helpers
@@ -235,6 +237,7 @@ class StateManager:
                 "recent_download_events": [event.as_dict() for event in self.recent_download_events],
                 "last_update": self.last_update,
                 "settings": self.settings.model_dump(),
+                "app_version": self.app_version,
             }
 
     def get_settings(self) -> Dict:

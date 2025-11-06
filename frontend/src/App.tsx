@@ -131,6 +131,7 @@ type ApiState = {
   recent_download_events: DownloadEvent[]
   last_update: number
   settings: BackendSettings
+  app_version?: string
 }
 
 type Filters = {
@@ -987,9 +988,10 @@ function DownloadEvents({
 
 function App() {
   const { colorMode, toggleColorMode } = useColorMode()
-  const appVersion = import.meta.env.VITE_APP_VERSION ?? __APP_VERSION__
+  const buildVersion = import.meta.env.VITE_APP_VERSION ?? __APP_VERSION__
   const currentYear = new Date().getFullYear()
   const [state, refresh] = useApiState()
+  const appVersion = state?.app_version?.trim() ? state.app_version : buildVersion
   const [selected, setSelected] = useState<string[]>([])
   const [filters, setFilters] = useState<Filters>(() => {
     if (typeof window === 'undefined') {
