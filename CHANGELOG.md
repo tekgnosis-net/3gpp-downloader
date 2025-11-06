@@ -1,3 +1,12 @@
+## <small>1.2.1 (2025-11-06)</small>
+
+* fix: fall back to packaged app version ([3aa2002](https://github.com/tekgnosis-net/3gpp-downloader/commit/3aa2002))
+* Corrected UI default URL to include docker-host ([a4e300e](https://github.com/tekgnosis-net/3gpp-downloader/commit/a4e300e))
+* Increase default thread count from 5 to 10 ([57339b4](https://github.com/tekgnosis-net/3gpp-downloader/commit/57339b4))
+* docs: document env files and validate compose ([61c1254](https://github.com/tekgnosis-net/3gpp-downloader/commit/61c1254))
+* docs: streamline docker quick start ([60df4c5](https://github.com/tekgnosis-net/3gpp-downloader/commit/60df4c5))
+* chore: consolidate docker publish workflow ([71b6e0c](https://github.com/tekgnosis-net/3gpp-downloader/commit/71b6e0c))
+
 ## 1.2.0 (2025-11-06)
 
 * feat: surface runtime app version ([58c6327](https://github.com/tekgnosis-net/3gpp-downloader/commit/58c6327))
