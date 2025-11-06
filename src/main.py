@@ -73,8 +73,10 @@ def download_pdfs(
 
     import asyncio
 
+    loop = asyncio.DefaultEventLoopPolicy().new_event_loop()
     try:
-        result = asyncio.run(
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(
             download_from_json(
                 src_file=input_file,
                 dest_dir=str(dest_path),
@@ -86,6 +88,13 @@ def download_pdfs(
     except asyncio.CancelledError:
         logger.info("Download cancelled by user")
         return False
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
     return bool(result)
 
 def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'latest.json') -> bool:

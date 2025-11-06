@@ -40,26 +40,21 @@ logger = setup_logger(logger_name, log_file=logging_file, console_level=console_
 
 __all__ = ["download_from_json"]
 
-# Global connector for connection pooling
-_connector = None
-
-def get_connector():
-    global _connector
-    if _connector is None:
-        # Create connector with connection pooling
-        _connector = aiohttp.TCPConnector(
-            limit=int(os.getenv('HTTP_MAX_CONNECTIONS', '100')),  # Max connections
-            limit_per_host=int(os.getenv('HTTP_MAX_CONNECTIONS_PER_HOST', '10')),  # Max connections per host
-            ttl_dns_cache=int(os.getenv('HTTP_DNS_CACHE_TTL', '300')),  # DNS cache TTL
-            use_dns_cache=os.getenv('HTTP_USE_DNS_CACHE', 'true').lower() == 'true',
-            keepalive_timeout=int(os.getenv('HTTP_KEEPALIVE_TIMEOUT', '60')),
-            enable_cleanup_closed=os.getenv('HTTP_ENABLE_CLEANUP_CLOSED', 'true').lower() == 'true',
-        )
-    return _connector
+def _build_connector() -> aiohttp.TCPConnector:
+    """Create a fresh connector. Each session owns its connector to avoid cross-loop reuse."""
+    return aiohttp.TCPConnector(
+        limit=int(os.getenv('HTTP_MAX_CONNECTIONS', '100')),
+        limit_per_host=int(os.getenv('HTTP_MAX_CONNECTIONS_PER_HOST', '10')),
+        ttl_dns_cache=int(os.getenv('HTTP_DNS_CACHE_TTL', '300')),
+        use_dns_cache=os.getenv('HTTP_USE_DNS_CACHE', 'true').lower() == 'true',
+        keepalive_timeout=int(os.getenv('HTTP_KEEPALIVE_TIMEOUT', '60')),
+        enable_cleanup_closed=os.getenv('HTTP_ENABLE_CLEANUP_CLOSED', 'true').lower() == 'true',
+    )
 
 def get_session():
     return aiohttp.ClientSession(
-        connector=get_connector(),
+        connector=_build_connector(),
+        connector_owner=True,
         timeout=aiohttp.ClientTimeout(
             total=float(os.getenv('HTTP_TOTAL_TIMEOUT', '300')),
             connect=float(os.getenv('HTTP_CONNECT_TIMEOUT', '10')),
@@ -68,11 +63,8 @@ def get_session():
     )
 
 async def cleanup():
-    """Cleanup the global connector"""
-    global _connector
-    if _connector:
-        await _connector.close()
-        _connector = None
+    """Backwards compatibility shim; retained for callers expecting the coroutine."""
+    return
 
 # ------------------------------------------------------------------
 #  Retry utilities
@@ -216,6 +208,7 @@ async def _fetch_and_write(
         close_session = False
     
     try:
+        logger.info(f"[fetch_and_write] HEAD request for {url} on {threading.current_thread().name}")
         # 1️⃣  Ask for the remote size (HEAD) with retry
         async def head_request():
             async with session.head(url) as head_resp:
@@ -224,6 +217,7 @@ async def _fetch_and_write(
                 return head_resp
         
         head_resp = await retry_with_backoff(head_request)
+        logger.info(f"[fetch_and_write] HEAD response {url} size={head_resp.headers.get('Content-Length')} status={head_resp.status}")
         remote_size = int(head_resp.headers.get('Content-Length', 0))
         supports_ranges = head_resp.headers.get('Accept-Ranges', '').lower() == 'bytes'
         # 2️⃣  Make sure the parent folder exists (creates any missing part)
@@ -354,6 +348,8 @@ async def _download_all(
                 / filename
             )
 
+            logger.info(f"[download_item] starting {filename} on {threading.current_thread().name}")
+
             if callback:
                 callback(filename, "starting", 0.0)
 
@@ -372,6 +368,7 @@ async def _download_all(
                         session=session,
                         progress_callback=file_progress,
                     )
+                    logger.info(f"[download_item] finished {filename} success={success}")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -483,8 +480,7 @@ async def download_from_json(
 
     try:
         if cancel_event is not None:
-            loop = asyncio.get_running_loop()
-            cancel_listener = asyncio.create_task(loop.run_in_executor(None, cancel_event.wait))
+            cancel_listener = asyncio.create_task(asyncio.to_thread(cancel_event.wait))
 
             done, _ = await asyncio.wait(
                 {download_task, cancel_listener},
