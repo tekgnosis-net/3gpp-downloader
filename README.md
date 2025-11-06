@@ -52,7 +52,7 @@ docker compose up -d
 docker compose logs -f 3gpp-downloader
 ```
 
-- UI default: `http://localhost:8085` (mapped to container port `32123`).
+- UI default: `http://<docker-host>:8085` (mapped to container port `32123`).
 - API inside the container: `http://localhost:32123`.
 - Bind mounts: `./downloads` (PDFs) and `./logs` (runtime logs).
 - Update to the newest release with `docker compose pull` followed by `docker compose up -d`.
