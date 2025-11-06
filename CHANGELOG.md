@@ -1,3 +1,7 @@
+## <small>1.1.2 (2025-11-06)</small>
+
+* fix: stabilize downloader event loop ([8df105a](https://github.com/tekgnosis-net/3gpp-downloader/commit/8df105a))
+
 ## <small>1.1.1 (2025-11-06)</small>
 
 * fix: remove manual chunk splitting ([169afb1](https://github.com/tekgnosis-net/3gpp-downloader/commit/169afb1))
