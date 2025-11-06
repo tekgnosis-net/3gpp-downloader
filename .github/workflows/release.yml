@@ -59,8 +59,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Determine build version
+        id: app_version
+        env:
+          RELEASE_PUBLISHED: ${{ steps.semantic.outputs.new_release_published }}
+          RELEASE_VERSION: ${{ steps.semantic.outputs.new_release_version }}
+        run: |
+          if [ "$RELEASE_PUBLISHED" = "true" ] && [ -n "$RELEASE_VERSION" ]; then
+            echo "value=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          else
+            SHORT_SHA=${GITHUB_SHA::7}
+            echo "value=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Log in to GHCR
-        if: steps.semantic.outputs.new_release_published == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -68,17 +80,16 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Docker metadata
-        if: steps.semantic.outputs.new_release_published == 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=${{ steps.semantic.outputs.new_release_version }}
             type=raw,value=latest
+            type=sha
+            type=raw,value=${{ steps.semantic.outputs.new_release_version }},enable=${{ steps.semantic.outputs.new_release_published == 'true' }}
 
       - name: Build and push Docker image
-        if: steps.semantic.outputs.new_release_published == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -86,5 +97,5 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            APP_VERSION=${{ steps.semantic.outputs.new_release_version }}
+            APP_VERSION=${{ steps.app_version.outputs.value }}
           platforms: linux/amd64,linux/arm64
