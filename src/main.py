@@ -7,9 +7,9 @@ import sys
 import argparse
 import json
 from pathlib import Path
-from threading import Timer
+from threading import Timer, Event
 import signal
-from collections import defaultdict
+from typing import Callable, Dict, Optional
 from tools.etsi_spider import EtsiSpider
 from scrapy.crawler import CrawlerProcess
 from tools.monitored_pool import MonitoredPoolManager
@@ -17,6 +17,12 @@ import logging
 from utils.logging_config import setup_logger
 import time
 from tools.json_downloader import download_from_json
+from tools.filtering import filter_latest_records
+
+try:
+    from api.extensions.scrape_progress import EXTENSION_PATH as PROGRESS_EXTENSION
+except Exception:  # pragma: no cover - optional extension
+    PROGRESS_EXTENSION = None
 
 
 #configure logger
@@ -41,7 +47,13 @@ def cleanup(pool):
     pool.clear()
     logger.info(f"Cleaned up HTTPS connection pools at exit...")
 
-def download_pdfs(input_file: str = 'latest.json', dest_dir: str = 'downloads/pdfs', concurrency: int = 5, callback=None) -> bool:
+def download_pdfs(
+    input_file: str = 'latest.json',
+    dest_dir: str = 'downloads/pdfs',
+    concurrency: int = 5,
+    callback=None,
+    cancel_event: Optional[Event] = None,
+) -> bool:
     """
     Downloads PDFs from the provided JSON file containing links.
     
@@ -49,7 +61,8 @@ def download_pdfs(input_file: str = 'latest.json', dest_dir: str = 'downloads/pd
         input_file (str): Path to the input JSON file (default: 'latest.json')
         dest_dir (str): Directory to save the downloaded PDFs (default: 'downloads/pdfs')
         concurrency (int): Number of concurrent downloads (default: 5)
-        callback (callable): Optional callback function to call after each download
+    callback (callable): Optional callback function to call after each download
+    cancel_event (threading.Event | None): When set, stops further downloads gracefully
 
     Returns:
         bool: True if downloads were successful, False otherwise
@@ -58,14 +71,21 @@ def download_pdfs(input_file: str = 'latest.json', dest_dir: str = 'downloads/pd
     dest_path = Path(dest_dir)
     dest_path.mkdir(parents=True, exist_ok=True)
 
-        # Download the PDFs using the JSON downloader utility
     import asyncio
-    result = asyncio.run(download_from_json(
-        src_file=input_file,
-        dest_dir=str(dest_path),
-        concurrency=concurrency,
-        progress_callback=callback
-    ))
+
+    try:
+        result = asyncio.run(
+            download_from_json(
+                src_file=input_file,
+                dest_dir=str(dest_path),
+                concurrency=concurrency,
+                progress_callback=callback,
+                cancel_event=cancel_event,
+            )
+        )
+    except asyncio.CancelledError:
+        logger.info("Download cancelled by user")
+        return False
     return bool(result)
 
 def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'latest.json') -> bool:
@@ -98,38 +118,13 @@ def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'l
         logger.info(f"Filtering failed in {elapsed:.2f} seconds.")
         return False
 
-    # Group by ts_number using defaultdict
-    grouped = defaultdict(list)
-    skipped_items = 0
-    for item in data:
-        ts_number = item.get('ts_number') or item.get('ts')
-        version = item.get('version')
-        if not ts_number or not version:
-            skipped_items += 1
-            continue
-        grouped[ts_number].append(item)
-    
-    # For each group, find the item with the highest version
-    filtered = []
-    for ts, items in grouped.items():
-        # Sort by version, assuming version is like '18.10.00'
-        def version_key(item):
-            raw_version = str(item.get('version', '0'))
-            components = []
-            for segment in raw_version.split('.'):
-                try:
-                    components.append(int(segment))
-                except ValueError:
-                    # Fall back to numeric prefix when version contains letters
-                    digits = ''.join(ch for ch in segment if ch.isdigit())
-                    components.append(int(digits) if digits else 0)
-            return tuple(components or [0])
-        
-        latest = max(items, key=version_key)
-        filtered.append(latest)
-    
+    filtered, skipped_items = filter_latest_records(data)
+
     if skipped_items:
-        logger.warning(f"Skipped {skipped_items} entries missing ts_number/version while filtering {input_file}.")
+        logger.warning(
+            f"Skipped {skipped_items} entries missing ts_number/version while filtering {input_file}."
+        )
+
     if not filtered:
         logger.error("No valid specifications found after filtering; aborting.")
         return False
@@ -141,11 +136,17 @@ def filter_latest_versions(input_file: str = 'links.json', output_file: str = 'l
     
     end_time = time.time()
     elapsed = end_time - start_time
-    logger.info(f"Filtered {len(data)} items to {len(filtered)} latest versions in {output_file} in {elapsed:.2f} seconds.")
+    logger.info(
+        f"Filtered {len(data)} items to {len(filtered)} latest versions in {output_file} in {elapsed:.2f} seconds."
+    )
     return True
 
 # Function to invoke the scrapy class and trigger the scraping
-def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log') -> dict:
+def run_scraper(
+    logging_lvl: int = logging.INFO,
+    logfile: str = 'logs/scrapy.log',
+    progress_callback: Optional[Callable[[float, Dict[str, int]], None]] = None,
+) -> dict:
     """
     Function to invoke the scrapy class and trigger the scraping
     """
@@ -164,7 +165,7 @@ def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log
     # Example: 25-12-2023 14:30:59.123456
     date_fmt = '%d-%m-%Y %H:%M:%S.%f'
 
-    process = CrawlerProcess(settings={
+    settings = {
         'FEEDS': {
             'downloads/links.json': {'format': 'json', 'overwrite': True}
         },
@@ -177,7 +178,13 @@ def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log
         'LOG_LEVEL': logging_lvl,
         'LOG_FORMAT': default_fmt,
         'LOG_DATEFORMAT': date_fmt,
-    })
+    }
+    if PROGRESS_EXTENSION:
+        settings.setdefault('EXTENSIONS', {})[PROGRESS_EXTENSION] = 5
+        if progress_callback:
+            settings['SCRAPE_PROGRESS_CALLBACK'] = progress_callback
+
+    process = CrawlerProcess(settings=settings)
     # Start the crawling using the EtsiSpider
     process.crawl(EtsiSpider)
     # Measure the time taken for scraping
@@ -188,7 +195,15 @@ def run_scraper(logging_lvl: int = logging.INFO, logfile: str = 'logs/scrapy.log
     elapsed = end_time - start_time
     logger.info(f"Scraping completed in {elapsed:.2f} seconds.")
 
-    stats = process.stats.get_stats() or {}
+    # Safely attempt to collect scrapy stats. Some CrawlerProcess versions may not
+    # expose a .stats attribute after start(); avoid raising an exception here so
+    # the caller can still rely on the produced artifact (downloads/links.json)
+    stats = {}
+    try:
+        if hasattr(process, "stats") and getattr(process.stats, "get_stats", None):
+            stats = process.stats.get_stats() or {}
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(f"Unable to collect scrapy stats from process: {exc}")
     links_path = Path('downloads/links.json')
 
     if stats:
@@ -267,9 +282,16 @@ def download_data(input_file: str = 'latest.json') -> bool:
         logger.error(f"Download error: {e}")
         return False
 
-def scrape_data_with_config(resume: bool = False, no_download: bool = False, all_versions: bool = False, 
-                          organize_by_series: bool = False, specific_release: int = None, 
-                          threads: int = 5, verbose: bool = False) -> bool:
+def scrape_data_with_config(
+    resume: bool = False,
+    no_download: bool = False,
+    all_versions: bool = False,
+    organize_by_series: bool = False,
+    specific_release: int = None,
+    threads: int = 5,
+    verbose: bool = False,
+    progress_callback: Optional[Callable[[float, Dict[str, int]], None]] = None,
+) -> bool:
     """
     Enhanced scraping function with configuration options
     """
@@ -288,7 +310,10 @@ def scrape_data_with_config(resume: bool = False, no_download: bool = False, all
             else:
                 logger.info("No existing files found, proceeding with scraping")
         
-        stats = run_scraper(logging_lvl=logging.DEBUG if verbose else logging.INFO)
+        stats = run_scraper(
+            logging_lvl=logging.DEBUG if verbose else logging.INFO,
+            progress_callback=progress_callback,
+        )
         if stats:
             logger.info("Scraping completed successfully")
             return True
@@ -299,10 +324,18 @@ def scrape_data_with_config(resume: bool = False, no_download: bool = False, all
         logger.error(f"Scraping error: {e}")
         return False
 
-def download_data_with_config(input_file: str = 'latest.json', resume: bool = False, no_download: bool = False, 
-                            all_versions: bool = False, organize_by_series: bool = False, 
-                            specific_release: int = None, threads: int = 5, verbose: bool = False, 
-                            progress_callback=None) -> bool:
+def download_data_with_config(
+    input_file: str = 'latest.json',
+    resume: bool = False,
+    no_download: bool = False,
+    all_versions: bool = False,
+    organize_by_series: bool = False,
+    specific_release: int = None,
+    threads: int = 5,
+    verbose: bool = False,
+    progress_callback=None,
+    cancel_event: Optional[Event] = None,
+) -> bool:
     """
     Enhanced download function with configuration options
     """
@@ -318,7 +351,16 @@ def download_data_with_config(input_file: str = 'latest.json', resume: bool = Fa
         
         dest_dir = 'downloads/By-Series' if organize_by_series else 'downloads/By-Release'
         
-        success = download_pdfs(input_file=input_file, dest_dir=dest_dir, concurrency=threads, callback=progress_callback)
+        success = download_pdfs(
+            input_file=input_file,
+            dest_dir=dest_dir,
+            concurrency=threads,
+            callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+        if cancel_event and cancel_event.is_set():
+            logger.info("Download cancelled before completion")
+            return False
         if success:
             logger.info("Download completed successfully")
             return True

@@ -1,0 +1,22 @@
+{
+  "resume_downloads": true,
+  "no_download": false,
+  "download_all_versions": false,
+  "organize_by_series": false,
+  "specific_release": null,
+  "thread_count": 5,
+  "verbose_logging": false,
+  "http_max_connections": 100,
+  "http_max_connections_per_host": 10,
+  "http_total_timeout": 300,
+  "http_connect_timeout": 10,
+  "http_read_timeout": 60,
+  "retry_max_attempts": 5,
+  "retry_base_delay": 1.0,
+  "retry_max_delay": 60.0,
+  "scrapy_download_delay": 0.1,
+  "scrapy_concurrent_requests": 8,
+  "etsi_min_release": 15,
+  "web_max_log_messages": 100,
+  "web_refresh_interval": 5
+}
