@@ -4,6 +4,11 @@ import re
 import logging
 import os
 from utils.logging_config import setup_logger
+
+try:
+    from api.extensions.scrape_progress import EXTENSION_PATH as PROGRESS_EXTENSION
+except Exception:  # pragma: no cover - defensive import guard
+    PROGRESS_EXTENSION = None
 #configure logger
 logging_file = os.getenv('ETSI_SPIDER_LOG_FILE', 'logs/etsi_spider.log')
 logger_name = os.getenv('ETSI_SPIDER_LOGGER_NAME', 'etsi_spider')
@@ -19,11 +24,21 @@ class EtsiSpider(scrapy.Spider):
     start_urls = os.getenv('ETSI_START_URLS', 'https://www.etsi.org/deliver/etsi_ts/').split(',')
 
     # Custom settings for the spider
-    custom_settings = {
+    extension_settings = {
         'DOWNLOAD_DELAY': float(os.getenv('SCRAPY_DOWNLOAD_DELAY', '0.1')),
         'CONCURRENT_REQUESTS_PER_DOMAIN': int(os.getenv('SCRAPY_CONCURRENT_REQUESTS_PER_DOMAIN', '8')),
         'USER_AGENT': os.getenv('SCRAPY_USER_AGENT', '3gpp-downloader/1.0'),
     }
+    if PROGRESS_EXTENSION:
+        extension_settings.update(
+            {
+                'EXTENSIONS': {
+                    PROGRESS_EXTENSION: 10,
+                }
+            }
+        )
+
+    custom_settings = extension_settings
 
 
     def parse(self, response):

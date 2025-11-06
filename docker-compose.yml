@@ -11,6 +11,7 @@ services:
       # Mount source for development (optional)
       - ./src:/app/src
       - ./run_web.py:/app/run_web.py
+      - ./frontend/dist:/app/frontend/dist
     environment:
       - PYTHONPATH=/app/src
       - PYTHONUNBUFFERED=1

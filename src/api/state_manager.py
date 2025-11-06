@@ -198,13 +198,13 @@ class StateManager:
             self.current_download_item = filename
             self._touch()
 
-    def update_settings(self, updates: Dict) -> UserSettings:
+    def update_settings(self, updates: Dict) -> Dict:
         with self._lock:
             new_settings = self.settings.model_copy(update=updates)
             self.settings = new_settings
             self.save_settings()
             self._touch()
-            return new_settings
+            return new_settings.model_dump()
 
     def set_verbose_logging(self, enabled: bool) -> None:
         with self._lock:

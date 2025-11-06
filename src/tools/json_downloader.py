@@ -14,10 +14,15 @@ Author: KK (2025‑09‑25)
 
 # ────── Imports ──────
 import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
 import json
+import threading
+
+from collections.abc import Callable
+from typing import Any, Optional
 
 import aiohttp          # HTTP client
 import aiofiles         # async file I/O
@@ -287,10 +292,11 @@ async def _fetch_and_write(
 #  _download_all()
 # ------------------------------------------------------------------
 async def _download_all(
-        items: list[dict],
-        base_dir: Path,
-        concurrency: int = 4,
-        callback=None,
+    items: list[dict],
+    base_dir: Path,
+    concurrency: int = 4,
+    callback=None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> None:
     """
     Kick off all downloads concurrently, but update a tqdm bar after each file finishes.
@@ -321,6 +327,9 @@ async def _download_all(
     processed = 0
     errors = 0
 
+    if cancel_event and cancel_event.is_set():
+        raise asyncio.CancelledError()
+
     session = get_session()
     try:
         sem = asyncio.Semaphore(concurrency)
@@ -329,6 +338,9 @@ async def _download_all(
 
         async def download_item(item):
             nonlocal completed, processed, errors
+
+            if cancel_event and cancel_event.is_set():
+                raise asyncio.CancelledError()
 
             url = item["url"]
             series = item.get("series", "0")
@@ -347,6 +359,9 @@ async def _download_all(
 
             try:
                 async with sem:
+                    if cancel_event and cancel_event.is_set():
+                        raise asyncio.CancelledError()
+
                     def file_progress(pct: float):
                         if callback:
                             callback(filename, "file_progress", pct)
@@ -357,6 +372,8 @@ async def _download_all(
                         session=session,
                         progress_callback=file_progress,
                     )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error(f"Unexpected error downloading {url}: {exc}")
                 success = False
@@ -381,7 +398,12 @@ async def _download_all(
 
         with tqdm_asyncio(total=total_items, desc="Downloading") as pbar:
             tasks = [asyncio.create_task(download_item(item)) for item in items]
-            await asyncio.gather(*tasks)
+            try:
+                await asyncio.gather(*tasks)
+            except asyncio.CancelledError:
+                for task in tasks:
+                    task.cancel()
+                raise
 
         if callback:
             callback("__overall__", "all_finished", 100.0)
@@ -396,14 +418,15 @@ async def _download_all(
 #  download_from_json()
 # ------------------------------------------------------------------
 async def download_from_json(
-        src_file: str | Path,
-        dest_dir: str | Path = "./downloads/",
-        url_key: str = "url",
-        series_key: str = "series",
-        release_key: str = "release",
-        concurrency: int = 10,
-        verbose: bool = True,
-        progress_callback=None,
+    src_file: str | Path,
+    dest_dir: str | Path = "./downloads/",
+    url_key: str = "url",
+    series_key: str = "series",
+    release_key: str = "release",
+    concurrency: int = 10,
+    verbose: bool = True,
+    progress_callback: Callable[[str, str, Any], None] | None = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> bool:
     """
     High‑level helper that glues all the pieces together.
@@ -428,6 +451,9 @@ async def download_from_json(
             - "overall_progress": aggregate percent of processed files
             - "all_finished": all downloads completed (value 100)
             - "errors": number of files that failed
+            - "cancelled": downloads aborted before completion
+    cancel_event : threading.Event | None
+        If provided, download operations abort as soon as the event is set.
 
     Returns
     -------
@@ -443,12 +469,46 @@ async def download_from_json(
     if verbose:
         logger.info(f"[json_downloader] → downloading {len(data)} URLs to {dest_dir}")
 
-    return await _download_all(
-        items=data,
-        base_dir=Path(dest_dir),
-        concurrency=concurrency,
-        callback=progress_callback,
+    download_task = asyncio.create_task(
+        _download_all(
+            items=data,
+            base_dir=Path(dest_dir),
+            concurrency=concurrency,
+            callback=progress_callback,
+            cancel_event=cancel_event,
+        )
     )
+
+    cancel_listener: Optional[asyncio.Task[bool]] = None
+
+    try:
+        if cancel_event is not None:
+            loop = asyncio.get_running_loop()
+            cancel_listener = asyncio.create_task(loop.run_in_executor(None, cancel_event.wait))
+
+            done, _ = await asyncio.wait(
+                {download_task, cancel_listener},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if cancel_listener in done and not download_task.done():
+                download_task.cancel()
+                try:
+                    await download_task
+                except asyncio.CancelledError:
+                    pass
+
+                if progress_callback:
+                    progress_callback("__overall__", "cancelled", None)
+
+                return False
+
+        return await download_task
+    finally:
+        if cancel_listener is not None:
+            cancel_listener.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancel_listener
 
 # ------------------------------------------------------------------
 #  Demo / entry point
