@@ -1,6 +1,6 @@
 # 3GPP Downloader
 
-3GPP Downloader automates the discovery and download of official 3GPP specification PDFs. This branch (`feature/chakra-ui-refactor`) pairs a FastAPI backend with a Chakra UI + React frontend.
+3GPP Downloader automates the discovery and download of official 3GPP specification PDFs with a FastAPI backend and a Chakra UI + React frontend.
 
 ## Highlights
 
@@ -41,16 +41,21 @@ downloads/, logs/     Data + log volumes (auto-created/mounted)
 
 ### Docker (recommended)
 
+Prebuilt images are published to GitHub Container Registry; no local build step is required.
+
 ```bash
-git clone https://github.com/<your-org>/3gpp-downloader.git
+git clone https://github.com/tekgnosis-net/3gpp-downloader.git
 cd 3gpp-downloader
-docker compose up --build -d
-docker compose logs -f
+docker login ghcr.io -u <github-username>
+docker compose pull
+docker compose up -d
+docker compose logs -f 3gpp-downloader
 ```
 
 - UI default: `http://localhost:8085` (mapped to container port `32123`).
 - API inside the container: `http://localhost:32123`.
 - Bind mounts: `./downloads` (PDFs) and `./logs` (runtime logs).
+- Update to the newest release with `docker compose pull` followed by `docker compose up -d`.
 
 ### Local development
 
@@ -150,18 +155,18 @@ npm run build
 
 | Symptom | Suggested fix |
 |---------|----------------|
-| UI unreachable via Docker | Ensure `docker compose up --build -d` finished; confirm port mapping `8085:32123`. |
-| “Download already in progress” | Wait for completion or click `Stop Download`; button re-enables once idle. |
-| “Invalid Date” entries | Update to the latest frontend build (timestamp formatter patched). |
-| Empty table after filtering | Refresh; backend resets pagination for filtered datasets. Ensure `/api/files` reports `file_type: filtered`. |
-| `ModuleNotFoundError: pytest` | Install dev dependency in the venv: `pip install pytest`. |
-| Large bundle warning | Manual chunking already separates React/Chakra/icons; adjust `frontend/vite.config.ts` if adding large libs. |
+| UI unreachable via Docker | Confirm the container pulled successfully (`docker compose pull`) and is healthy (`docker compose ps`). Port `8085` must be free on the host. |
+| Cannot pull image (401) | Generate a classic PAT with `read:packages`, log in via `docker login ghcr.io -u <github-username>`, then retry the pull. |
+| “Download already in progress” | Wait for completion or click `Stop Download`; button re-enables once the state returns to `idle`. |
+| Empty table after filtering | Click “Reload Files” in the UI or call `/api/files/reload`, then re-apply filters. The status banner should mention “Latest versions ready”. |
+| Frontend connecting to wrong API host | Set `VITE_API_BASE_URL` before running `npm run dev` or edit `frontend/.env` so the SPA points at the live backend. |
+| Python tests missing | Activate the virtualenv and install dev deps: `source .venv/bin/activate && pip install -r requirements.txt`. |
 
 Logs:
 
 ```bash
 tail -f logs/json_downloader.log
-docker compose logs -f
+docker compose logs -f 3gpp-downloader
 ```
 
 ## Contributing
