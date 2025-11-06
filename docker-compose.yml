@@ -1,8 +1,9 @@
 services:
   3gpp-downloader:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    #build:
+    #  context: .
+    #  dockerfile: Dockerfile
+    image: ghcr.io/k-kumar/3gpp-downloader:latest
     ports:
       - "8085:32123"
     volumes:
