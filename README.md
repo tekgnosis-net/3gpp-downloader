@@ -14,6 +14,7 @@
 - 🐳 Docker image bundles FastAPI, workers, and the production React build.
 
 ---
+<img width="919" height="771" alt="image" src="https://github.com/user-attachments/assets/01779058-c6fa-49c5-b4f5-eea5220fb67a" />
 
 ## Architecture
 
