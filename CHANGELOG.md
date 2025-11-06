@@ -1,3 +1,9 @@
+## 1.2.0 (2025-11-06)
+
+* feat: surface runtime app version ([58c6327](https://github.com/tekgnosis-net/3gpp-downloader/commit/58c6327))
+* Fixed image to correct ghcr path. ([178db2e](https://github.com/tekgnosis-net/3gpp-downloader/commit/178db2e))
+* Updated to use the ghcr image. ([d996412](https://github.com/tekgnosis-net/3gpp-downloader/commit/d996412))
+
 ## <small>1.1.2 (2025-11-06)</small>
 
 * fix: stabilize downloader event loop ([8df105a](https://github.com/tekgnosis-net/3gpp-downloader/commit/8df105a))
