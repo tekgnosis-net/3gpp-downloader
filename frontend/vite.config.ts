@@ -16,24 +16,6 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(appVersion),
   },
   build: {
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes('node_modules')) {
-            if (id.includes('react') || id.includes('scheduler')) {
-              return 'vendor-react'
-            }
-            if (id.includes('@chakra-ui') || id.includes('@emotion') || id.includes('framer-motion')) {
-              return 'vendor-chakra'
-            }
-            if (id.includes('axios')) {
-              return 'vendor-axios'
-            }
-            return 'vendor'
-          }
-        },
-      },
-    },
     chunkSizeWarningLimit: 600,
   },
 })
