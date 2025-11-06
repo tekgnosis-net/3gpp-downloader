@@ -29,7 +29,7 @@ class UserSettings(BaseModel):
     download_all_versions: bool = False
     organize_by_series: bool = False
     specific_release: Optional[int] = None
-    thread_count: int = 5
+    thread_count: int = 10
     verbose_logging: bool = False
 
     http_max_connections: int = 100
