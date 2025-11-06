@@ -12,11 +12,16 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - fallback for older interpreters
+    tomllib = None  # type: ignore
+
 from pydantic import BaseModel
-from datetime import datetime, timezone
 
 _SETTINGS_PATH = Path("web_settings.json")
 
@@ -83,7 +88,7 @@ class StateManager:
         self.failed_downloads: List[str] = []
         self.recent_download_events: List[DownloadEvent] = []
         self.last_update = time.time()
-        self.app_version = os.getenv("APP_VERSION", "dev")
+        self.app_version = self._resolve_app_version()
 
     # ------------------------------------------------------------------
     # Persistence helpers
@@ -239,6 +244,36 @@ class StateManager:
                 "settings": self.settings.model_dump(),
                 "app_version": self.app_version,
             }
+
+    def _resolve_app_version(self) -> str:
+        """Determine a human-friendly version string for the UI."""
+
+        env_version = (os.getenv("APP_VERSION") or "").strip()
+        if env_version and env_version.lower() not in {"latest", "dev", ""}:
+            return env_version
+
+        pyproject_path = Path("pyproject.toml")
+        if tomllib and pyproject_path.exists():
+            try:
+                with pyproject_path.open("rb") as handle:
+                    data = tomllib.load(handle)
+                version = data.get("project", {}).get("version")
+                if isinstance(version, str) and version.strip():
+                    return version.strip()
+            except Exception:  # pragma: no cover - defensive fallback
+                pass
+
+        package_path = Path("frontend/package.json")
+        if package_path.exists():
+            try:
+                data = json.loads(package_path.read_text())
+                version = data.get("version")
+                if isinstance(version, str) and version.strip():
+                    return version.strip()
+            except Exception:  # pragma: no cover - defensive fallback
+                pass
+
+        return env_version or "dev"
 
     def get_settings(self) -> Dict:
         with self._lock:
