@@ -4,6 +4,7 @@ services:
     #  context: .
     #  dockerfile: Dockerfile
     image: ghcr.io/tekgnosis-net/3gpp-downloader:latest
+    pull_policy: always
     ports:
       - "8085:32123"
     volumes:

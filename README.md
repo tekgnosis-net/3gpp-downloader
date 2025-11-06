@@ -128,15 +128,16 @@ OpenAPI docs: `http://localhost:32123/docs` (when enabled).
 
 ## Configuration
 
-1. Copy `.env.example` ➜ `.env` to customise runtime defaults.
+1. Copy `.env.example` ➜ `.env` (root) and adjust credentials/timeouts before launching. The Docker compose file automatically passes through variables declared there.
 2. Key environment groups:
   - `MAIN_*`, `JSON_DOWNLOADER_*`, `ETSI_SPIDER_*`, `MONITORED_POOL_*` – logging names, destinations, levels.
   - `SCRAPY_*` – concurrency, delay, user agent for the spider.
   - `HTTP_*`, `DOWNLOAD_*` – aiohttp pooling, timeouts, retry thresholds.
   - `RETRY_*` – exponential backoff defaults.
   - `API_CORS_ORIGINS` – comma-separated list of allowed web origins for the FastAPI CORS middleware.
-3. Frontend preferences persist to `web_settings.json` (thread count, resume mode, organise-by-series, auto-scroll, etc.).
-4. Table filters persist in the browser to make reopening the dashboard faster.
+3. Additional frontend-only overrides (e.g., `VITE_API_BASE_URL`) can live in `frontend/.env` if you are running the SPA separately via `npm run dev`.
+4. Frontend preferences persist to `web_settings.json` (thread count, resume mode, organise-by-series, auto-scroll, etc.).
+5. Table filters persist in the browser to make reopening the dashboard faster.
 
 ## Testing & Tooling
 
